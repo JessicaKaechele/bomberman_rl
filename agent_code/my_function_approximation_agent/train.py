@@ -3,8 +3,6 @@ import random
 from collections import namedtuple, deque
 from typing import List
 import numpy as np
-import collections
-from matplotlib import pyplot as plt
 
 import events as e
 from .callbacks import state_to_features
@@ -15,16 +13,12 @@ Transition = namedtuple('Transition',
 
 # Hyper parameters -- DO modify
 # TODO: modify
-TRANSITION_HISTORY_SIZE = 1000  # keep only ... last transitions
+TRANSITION_HISTORY_SIZE = 3  # keep only ... last transitions
 RECORD_ENEMY_TRANSITIONS = 1.0  # record enemy transitions with probability ...
-BATCH_SIZE=20
-GAMMA = 0.95
-LEARNING_RATE = 0.001
+
 # Events
 # TODO: zusätzliche events?
-DISTANCE_2 = "DISTANCE_2"
-DISTANCE_1 = "DISTANCE_1"
-DISTANCE_0 = "DISTANCE_0"
+# PLACEHOLDER_EVENT = "PLACEHOLDER"
 
 
 def setup_training(self):
@@ -38,9 +32,10 @@ def setup_training(self):
     # Example: Setup an array that will note transition tuples
     # (s, a, r, s')
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
-    self.last_positions = deque(maxlen=5)
+    self.learning_rate = 0.01
+    self.discount_factor = 0.99
     self.actions = {'UP': 0, 'RIGHT':1, 'DOWN':2, 'LEFT':3, 'WAIT':4, 'BOMB':5}
-    self.all_rewards = []
+    self.old_feature_vals = np.zeros((5))
 
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
@@ -64,27 +59,20 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
 
     # Idea: Add your own events to hand out rewards
     # TODO: own events?
-    current_pos = new_game_state['self'][3]
+    #if ...:
+    #    events.append(PLACEHOLDER_EVENT)
 
-    t=0
-    if len(self.last_positions) == 5:
-        dis_2 = np.sqrt((self.last_positions[2][0] - current_pos[0])**2 + (self.last_positions[2][1] - current_pos[1])**2)
-        dis_1 = np.sqrt(
-            (self.last_positions[1][0] - current_pos[0]) ** 2 + (self.last_positions[1][1] - current_pos[1]) ** 2)
-        dis_0 = np.sqrt(
-            (self.last_positions[0][0] - current_pos[0]) ** 2 + (self.last_positions[0][1] - current_pos[1]) ** 2)
-        if dis_2 < 1:
-            events.append(DISTANCE_2)
-        if dis_1 < 2:
-            events.append(DISTANCE_1)
-        if dis_0 < 3:
-            events.append(DISTANCE_0)
-    self.last_positions.append(current_pos)
-
+    # state_to_features is defined in callbacks.py
+    #self.transitions.append(Transition(state_to_features(old_game_state), self_action, state_to_features(new_game_state), reward_from_events(self, events)))
     reward = reward_from_events(self, events)
-    self.all_rewards.append(reward)
-    if self_action:
-        self.transitions.append(Transition(state_to_features(old_game_state), self_action, state_to_features(new_game_state), reward))
+    feature_vals = state_to_features(new_game_state, self_action)
+    Q_new = np.sum(self.model * feature_vals)
+    Q_old = np.sum(self.model * self.old_feature_vals)
+
+    delta = reward + self.discount_factor * np.argmax(Q_new) - Q_old
+    self.model = self.model + self.learning_rate * delta * np.asarray(self.old_feature_vals)
+    self.old_feature_vals = feature_vals
+
 
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
@@ -100,54 +88,8 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     :param self: The same object that is passed to all of your callbacks.
     """
     self.logger.debug(f'Encountered event(s) {", ".join(map(repr, events))} in final step')
-    reward = reward_from_events(self, events)
-    self.all_rewards.append(reward)
-    self.transitions.append(Transition(state_to_features(last_game_state), last_action, None, reward))
-    if len(self.transitions) < BATCH_SIZE:
-        return
-    batch = random.sample(self.transitions, int(len(self.transitions) / 1))
-    X = []
-    targets = []
-    for state, action, state_next, reward in batch:
-        q_update = reward
-        q_values = []
-        if self.is_fit:
-            q_values = self.model.predict([state])
-        else:
-            q_values = np.zeros(6).reshape(1, -1)
+    self.transitions.append(Transition(state_to_features(last_game_state, last_action), last_action, None, reward_from_events(self, events)))
 
-        if state_next is not None:
-            if self.is_fit:
-                #q_update = (reward + GAMMA * np.amax(self.model.predict(state_next)[0]))
-                q_value = q_values[0][self.actions[action]]
-                new_q_value = np.max(self.model.predict([state_next]))
-                q_update = q_value + LEARNING_RATE * (reward + GAMMA * new_q_value - q_value)
-            else:
-                q_update = reward
-
-
-        q_values[0][self.actions[action]] = q_update
-
-        # print(state)
-        # print(action)
-        # print(q_values)
-        X.append(state)
-        targets.append(q_values[0])
-    # print(X)
-    # print(targets)
-    self.model.fit(X, targets)
-    self.isFit = True
-
-
-    # save statistic
-    #plt.plot(self.all_rewards);
-    #plt.savefig("rewards_per_step")
-    #plt.xlabel("step")
-    #plt.ylabel("reward")
-    with open("statistics", "a") as f:
-        for reward in self.all_rewards:
-            f.writelines(str(reward)+ "\n")
-    self.all_rewards = []
     # Store the model
     with open("jessi-saved-model.pt", "wb") as file:
         pickle.dump(self.model, file)
@@ -168,18 +110,15 @@ def reward_from_events(self, events: List[str]) -> int:
         e.WAITED: -10,
         e.INVALID_ACTION: -10,
         e.BOMB_EXPLODED: 0,
-        e.BOMB_DROPPED: 0,
-        e.CRATE_DESTROYED: 0,
+        e.BOMB_DROPPED: 1,
+        e.CRATE_DESTROYED: 50,
         e.COIN_FOUND: 10,
         e.COIN_COLLECTED: 1000,
-        e.KILLED_OPPONENT: 0,
-        e.KILLED_SELF: 0,
-        e.GOT_KILLED: 0,
+        e.KILLED_OPPONENT: 1000,
+        e.KILLED_SELF: -1200,
+        e.GOT_KILLED: -1000,
         e.OPPONENT_ELIMINATED: 0,
-        e.SURVIVED_ROUND: 0,
-        DISTANCE_2: -10,
-        DISTANCE_1: -20,
-        DISTANCE_0: -30
+        e.SURVIVED_ROUND: 0
     }
     reward_sum = 0
     for event in events:

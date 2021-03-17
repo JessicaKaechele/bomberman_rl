@@ -1,10 +1,6 @@
 import os
 import pickle
 import random
-from sklearn.multioutput import MultiOutputRegressor
-
-from lightgbm import LGBMRegressor
-
 
 import numpy as np
 
@@ -26,16 +22,14 @@ def setup(self):
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
     # TODO: weights anders initialisieren
-    if self.train and not os.path.isfile("jessi-saved-model.pt"):
+    if self.train or not os.path.isfile("jessi-saved-model.pt"):
         self.logger.info("Setting up model from scratch.")
         #weights = np.random.rand(len(ACTIONS))
-        self.model = MultiOutputRegressor(LGBMRegressor(n_estimators=100, n_jobs=-1))
-        self.is_fit = False
+        self.model = np.random.rand(5)
     else:
         self.logger.info("Loading model from saved state.")
         with open("jessi-saved-model.pt", "rb") as file:
             self.model = pickle.load(file)
-        self.is_fit = True
 
 
 def act(self, game_state: dict) -> str:
@@ -48,19 +42,20 @@ def act(self, game_state: dict) -> str:
     :return: The action to take as a string.
     """
     # TODO: exploration anpassen
-    random_prob = .7
+    random_prob = .1
     # exploration:
-    if self.train and np.random.rand() < random_prob:
+    if self.train and random.random() < random_prob:
+        self.logger.debug("Choosing action purely at random.")
+        # 80%: walk in any direction. 10% wait. 10% bomb.
         return np.random.choice(ACTIONS, p=[.2, .2, .2, .2, .1, .1])
-
-    if self.is_fit == True:
-        q_values = self.model.predict([state_to_features(game_state)])
     else:
-        q_values = np.zeros(6).reshape(1, -1)
-    print(q_values)
-    print(np.argmax(q_values[0]))
-    print(ACTIONS[np.argmax(q_values[0])])
-    return ACTIONS[np.argmax(q_values[0])]
+        self.logger.debug("Querying model for action.")
+        action_space = []
+        for action in ACTIONS:
+            action_space.append(state_to_features(game_state, action))
+        Q = self.model * action_space
+        Q = np.sum(Q, axis=1)
+        return ACTIONS[np.argmax(Q)]
 
 
 def coin_ahead(new_pos, coins):
@@ -96,7 +91,7 @@ def made_step(new_pos, old_pos):
     else:
         return 0
 
-def state_to_features(game_state: dict) -> np.array:
+def state_to_features(game_state: dict, action: str) -> np.array:
     """
     *This is not a required function, but an idea to structure your code.*
 
@@ -123,36 +118,24 @@ def state_to_features(game_state: dict) -> np.array:
     others = [xy for (n, s, b, xy) in game_state['others']]
     coins = game_state['coins']
 
-    bomb_map = np.ones(arena.shape) * 5
-    for (xb, yb), t in bombs:
-         for (i, j) in [(xb + h, yb) for h in range(-3, 4)] + [(xb, yb + h) for h in range(-3, 4)]:
-             if (0 < i < bomb_map.shape[0]) and (0 < j < bomb_map.shape[1]):
-                 bomb_map[i, j] = min(bomb_map[i, j], t)
-
-    coin_map = np.zeros_like(arena)
-    coin_map[tuple(np.array(coins).T)] = 1
-
-    enemy_map = np.zeros_like(arena)
-    if others:
-         enemy_map[tuple(np.array(others).T)] = 1
-
-    self_map = np.full(arena.shape, -1)
-    self_map[x,y] = int(bombs_left)
-
-
+    if action == 'UP':
+        new_pos = (x,y - 1)
+    elif action == 'DOWN':
+        new_pos = (x, y + 1)
+    elif action == 'RIGHT':
+        new_pos = (x + 1, y)
+    elif action == 'LEFT':
+        new_pos = (x - 1, y)
+    else:
+        new_pos = (x,y)
 
     channels = []
-    #channels.append(arena)
-    #channels.append(bomb_map)
-    channels.append(coin_map)
-    #channels.append(enemy_map)
-    channels.append(self_map)
-    #channels.append(explosion_map)
-    #channels.append(nearest_distance)
-    #channels.append(dir)
-    #channels.append(x)
-    #channels.append(y)
+    channels.append(1)
+    channels.append(coin_ahead(new_pos, coins))
+    channels.append(wall_ahead(new_pos, arena))
+    channels.append(coin_forward(new_pos, (x,y), coins))
+    channels.append(made_step(new_pos, (x,y)))
     # concatenate them as a feature tensor (they must have the same shape), ...
     stacked_channels = np.stack(channels)
     # and return them as a vector
-    return stacked_channels.reshape(-1)
+    return channels # np.array2string(stacked_channels.reshape(-1))
