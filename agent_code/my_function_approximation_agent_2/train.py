@@ -12,13 +12,12 @@ Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
 
 # Hyper parameters -- DO modify
-# TODO: modify
 TRANSITION_HISTORY_SIZE = 3  # keep only ... last transitions
 RECORD_ENEMY_TRANSITIONS = 1.0  # record enemy transitions with probability ...
 
-# Events
-# TODO: zusätzliche events?
-# PLACEHOLDER_EVENT = "PLACEHOLDER"
+LEARNING_RATE = 0.01
+DISCOUNT_FACTOR = 0.99
+ACTIONS = {'UP': 0, 'RIGHT':1, 'DOWN':2, 'LEFT':3, 'WAIT':4, 'BOMB':5}
 
 
 def setup_training(self):
@@ -32,10 +31,10 @@ def setup_training(self):
     # Example: Setup an array that will note transition tuples
     # (s, a, r, s')
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
-    self.learning_rate = 0.01
-    self.discount_factor = 0.99
-    self.actions = {'UP': 0, 'RIGHT':1, 'DOWN':2, 'LEFT':3, 'WAIT':4, 'BOMB':5}
+
     self.old_feature_vals = np.zeros((8))
+    self.all_rewards = []
+
 
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
@@ -56,22 +55,16 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     :param events: The events that occurred when going from  `old_game_state` to `new_game_state`
     """
     self.logger.debug(f'Encountered game event(s) {", ".join(map(repr, events))} in step {new_game_state["step"]}')
+    reward = reward_from_events(self, events)
+    self.all_rewards.append(reward)
 
-    # Idea: Add your own events to hand out rewards
-    # TODO: own events?
-    #if ...:
-    #    events.append(PLACEHOLDER_EVENT)
-
-    # state_to_features is defined in callbacks.py
-    #self.transitions.append(Transition(state_to_features(old_game_state), self_action, state_to_features(new_game_state), reward_from_events(self, events)))
     if old_game_state:
-        reward = reward_from_events(self, events)
         features = state_to_features(old_game_state)
 
         next_features = state_to_features(new_game_state)
         q_values_next = np.array([m.predict([next_features])[0] for m in self.model])
-        td_target = reward + self.discount_factor * np.max(q_values_next)
-        self.model[self.actions[self_action]].partial_fit([features], [td_target])
+        update = reward + DISCOUNT_FACTOR * np.max(q_values_next)
+        self.model[ACTIONS[self_action]].partial_fit([features], [update])
 
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
@@ -87,11 +80,15 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     :param self: The same object that is passed to all of your callbacks.
     """
     self.logger.debug(f'Encountered event(s) {", ".join(map(repr, events))} in final step')
-    #self.transitions.append(Transition(state_to_features(last_game_state, last_action), last_action, None, reward_from_events(self, events)))
 
     # Store the model
     with open("jessi-saved-model.pt", "wb") as file:
         pickle.dump(self.model, file)
+
+    with open("rewards/statistics", "a") as f:
+        for reward in self.all_rewards:
+            f.writelines(str(reward)+ "\n")
+    self.all_rewards = []
 
 
 def reward_from_events(self, events: List[str]) -> int:

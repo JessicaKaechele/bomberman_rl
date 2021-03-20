@@ -28,7 +28,7 @@ def setup(self):
         self.model = []
         for _ in range(len(ACTIONS)):
             model = SGDRegressor(learning_rate="constant")
-            model.partial_fit([[0,0,0,0,0,0,0,0]], [0])
+            model.partial_fit([np.zeros(8)], [0])
             self.model.append(model)
     else:
         self.logger.info("Loading model from saved state.")
@@ -45,7 +45,6 @@ def act(self, game_state: dict) -> str:
     :param game_state: The dictionary that describes everything on the board.
     :return: The action to take as a string.
     """
-    # TODO: exploration anpassen
     random_prob = .1
     # exploration:
     if self.train and random.random() < random_prob:
@@ -104,7 +103,6 @@ def state_to_features(game_state: dict) -> np.array:
     :param game_state:  A dictionary describing the current game board.
     :return: np.array
     """
-    # TODO: state to feature traversion
     # This is the dict before the game begins and after it ends
     if game_state is None:
         return None
@@ -117,11 +115,19 @@ def state_to_features(game_state: dict) -> np.array:
     others = [xy for (n, s, b, xy) in game_state['others']]
     coins = game_state['coins']
 
+    coin_map = np.zeros_like(arena)
+    coin_map[tuple(np.array(coins).T)] = 1
+
+    self_map = np.full(arena.shape, -1)
+    self_map[x,y] = int(bombs_left)
+
 
     channels = []
     #channels.append(1)
     channels.append(directions_to_nearest_coins(coins, x, y))
     channels.append(directions_to_wall(arena, x, y))
+    #channels.append(coin_map)
+    #channels.append(self_map)
 
     # concatenate them as a feature tensor (they must have the same shape), ...
     stacked_channels = np.stack(channels).reshape(-1)
