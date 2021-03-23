@@ -34,9 +34,9 @@ def setup(self):
     file_handler.setLevel(logging.DEBUG)
     self.logger.addHandler(file_handler)
 
-    if not self.train and os.path.exists(MODEL_FILE):
+    if not self.train and os.path.exists('a.pt'):
         self.logger.info("Using existing model to play")
-        with open(MODEL_FILE, "rb") as file:
+        with open('a.pt', "rb") as file:
             self.model = pickle.load(file)
 
         self.is_fit = True
@@ -77,27 +77,21 @@ def state_to_features(game_state):
         field[coin_x][coin_y] = 50
 
     field[self_x][self_y] = 5
-    walls_in_direction = [1 if field[self_x][self_y + 1] == -1 else 0,
+    walls_in_direction = [1 if field[self_x + 1][self_y] == -1 else 0,
+                          1 if field[self_x - 1][self_y] == -1 else 0,
                           1 if field[self_x][self_y - 1] == -1 else 0,
-                          1 if field[self_x + 1][self_y] == -1 else 0,
-                          1 if field[self_x - 1][self_y] == -1 else 0]
+                          1 if field[self_x][self_y + 1] == -1 else 0]
 
-    coin_in_direction = [1 if field[self_x][self_y + 1] == 50 else 0,
+    coin_in_direction = [1 if field[self_x + 1][self_y] == 50 else 0,
+                         1 if field[self_x - 1][self_y] == 50 else 0,
                          1 if field[self_x][self_y - 1] == 50 else 0,
-                         1 if field[self_x + 1][self_y] == 50 else 0,
-                         1 if field[self_x - 1][self_y] == 50 else 0]
+                         1 if field[self_x][self_y + 1] == 50 else 0]
 
-    min_dist = 5000
-    min_x, min_y = [-1, -1]
-    for x, y in game_state['coins']:
-        distance_to_agent = np.abs(x - self_x) + np.abs(y - self_y)
-        if distance_to_agent < min_dist:
-            min_dist = distance_to_agent
-            min_x, min_y = x, y
+    [coin_x, coin_y], coin_dist = get_nearest_coin(game_state['coins'], (self_x, self_y))
 
     next_coin_dir = [0, 0, 0, 0]  # left, right, top, bottom
-    pos_delta_x = min_x - self_x
-    pos_delta_y = min_y - self_y
+    pos_delta_x = coin_x - self_x
+    pos_delta_y = coin_y - self_y
 
     if np.abs(pos_delta_x) >= np.abs(pos_delta_y):
         # left or right
@@ -114,4 +108,16 @@ def state_to_features(game_state):
 
 
     # [1 if bombs_left else 0] +
-    return np.array(walls_in_direction + coin_in_direction + [min_dist] + next_coin_dir).reshape(1, -1)
+    return np.array(walls_in_direction + coin_in_direction + [coin_dist] + next_coin_dir).reshape(1, -1)
+
+
+def get_nearest_coin(coin_map, self_pos):
+    min_dist = 5000
+    min_x, min_y = [-1, -1]
+    for x, y in coin_map:
+        distance_to_agent = np.abs(x - self_pos[0]) + np.abs(y - self_pos[1])
+        if distance_to_agent < min_dist:
+            min_dist = distance_to_agent
+            min_x, min_y = x, y
+
+    return (min_x, min_y), min_dist
