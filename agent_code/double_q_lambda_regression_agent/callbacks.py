@@ -9,7 +9,6 @@ import pickle
 POSSIBLE_ACTIONS = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'WAIT', 'BOMB']
 MODEL_FILE = 'weights.pt'
 
-
 EXPLORATION_RATE = 0.8
 MIN_EXPLORATION_RATE = 0.1
 EXPLORATION_RATE_DECAY = 0.99
@@ -67,14 +66,52 @@ def state_to_features(game_state):
     if game_state is None:
         return np.empty()
 
-    field = game_state['field']
+    field = game_state['field'].T
+
+    # field[field == 0] = (game_state['explosion_map'][field == 0] + 20)
+
     _, score, bombs_left, (self_x, self_y) = game_state['self']
     # others = game_state['others']
 
-    # explosion_map = game_state['explosion_map'
-    coins = np.zeros_like(field)
-    coins[tuple(np.array(game_state['coins']).T)] = 1
+    for coin_x, coin_y in game_state['coins']:
+        field[coin_x][coin_y] = 50
 
-    features = np.concatenate((np.array(field).flatten(), np.array([score, 1 if bombs_left else 0, self_x, self_y]), np.array(coins).flatten()))
+    field[self_x][self_y] = 5
+    walls_in_direction = [1 if field[self_x][self_y + 1] == -1 else 0,
+                          1 if field[self_x][self_y - 1] == -1 else 0,
+                          1 if field[self_x + 1][self_y] == -1 else 0,
+                          1 if field[self_x - 1][self_y] == -1 else 0]
 
-    return features.reshape(1, -1)
+    coin_in_direction = [1 if field[self_x][self_y + 1] == 50 else 0,
+                         1 if field[self_x][self_y - 1] == 50 else 0,
+                         1 if field[self_x + 1][self_y] == 50 else 0,
+                         1 if field[self_x - 1][self_y] == 50 else 0]
+
+    min_dist = 5000
+    min_x, min_y = [-1, -1]
+    for x, y in game_state['coins']:
+        distance_to_agent = np.abs(x - self_x) + np.abs(y - self_y)
+        if distance_to_agent < min_dist:
+            min_dist = distance_to_agent
+            min_x, min_y = x, y
+
+    next_coin_dir = [0, 0, 0, 0]  # left, right, top, bottom
+    pos_delta_x = min_x - self_x
+    pos_delta_y = min_y - self_y
+
+    if np.abs(pos_delta_x) >= np.abs(pos_delta_y):
+        # left or right
+        if pos_delta_x >= 0:
+            next_coin_dir[1] = 1
+        else:
+            next_coin_dir[0] = 1
+    elif np.abs(pos_delta_x) < np.abs(pos_delta_y):
+        # top or bottom
+        if pos_delta_y >= 0:
+            next_coin_dir[3] = 1
+        else:
+            next_coin_dir[2] = 1
+
+
+    # [1 if bombs_left else 0] +
+    return np.array(walls_in_direction + coin_in_direction + [min_dist] + next_coin_dir).reshape(1, -1)
