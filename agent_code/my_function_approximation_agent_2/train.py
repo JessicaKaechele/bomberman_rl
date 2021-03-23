@@ -1,21 +1,15 @@
-import pickle
-import random
-from collections import namedtuple, deque
+from collections import deque
 from typing import List
 import numpy as np
 
 import events as e
-from .callbacks import state_to_features
+from .features import state_to_features
 
-# This is only an example!
-Transition = namedtuple('Transition',
-                        ('state', 'action', 'next_state', 'reward'))
+from .custom_events import not_moving_event, did_not_escape_event, can_not_escape_event, bomb_near_crate_event, \
+    coin_reachable_event, DISTANCE_2, DISTANCE_1, DISTANCE_0, DROP_BOMB_NEAR_CRATE, DID_NOT_ESCAPE
+from .utils import add_statistics, end_statistics, save_model, save_rewards
 
-# Hyper parameters -- DO modify
-TRANSITION_HISTORY_SIZE = 3  # keep only ... last transitions
-RECORD_ENEMY_TRANSITIONS = 1.0  # record enemy transitions with probability ...
-
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.001
 DISCOUNT_FACTOR = 0.99
 ACTIONS = {'UP': 0, 'RIGHT':1, 'DOWN':2, 'LEFT':3, 'WAIT':4, 'BOMB':5}
 
@@ -28,14 +22,15 @@ def setup_training(self):
 
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
-    # Example: Setup an array that will note transition tuples
-    # (s, a, r, s')
-    self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
+    # variables for custom events
+    self.dropped_bomb = False
+    self.last_positions = deque(maxlen=5)
 
-    self.old_feature_vals = np.zeros((8))
+    # statistics
+    self.collected_coins_episode = 0
+    self.destroyed_crates_episode = 0
+    self.dropped_bombs = 0
     self.all_rewards = []
-
-
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """
@@ -55,16 +50,50 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     :param events: The events that occurred when going from  `old_game_state` to `new_game_state`
     """
     self.logger.debug(f'Encountered game event(s) {", ".join(map(repr, events))} in step {new_game_state["step"]}')
+    x,y = new_game_state['self'][3]
+    coins = new_game_state['coins']
+    arena = new_game_state['field']
+
+    add_statistics(self, events)
+
+    not_moving_event(x, y, events, self)
+    coin_reachable_event(arena, coins, events, x, y)
+    bomb_near_crate_event(arena, events, x, y)
+    can_not_escape_event(events, new_game_state, x, y)
+    did_not_escape_event(self, x, y, events)
+
     reward = reward_from_events(self, events)
     self.all_rewards.append(reward)
 
-    if old_game_state:
-        features = state_to_features(old_game_state)
+    do_learning(self, new_game_state, old_game_state, reward, self_action)
 
+
+def do_learning(self, new_game_state, old_game_state, reward, self_action):
+    if old_game_state and new_game_state:
+        features = state_to_features(old_game_state)
         next_features = state_to_features(new_game_state)
         q_values_next = np.array([m.predict([next_features])[0] for m in self.model])
+
+        # q learning or bellman?
         update = reward + DISCOUNT_FACTOR * np.max(q_values_next)
         self.model[ACTIONS[self_action]].partial_fit([features], [update])
+
+        # q learning with temporal difference
+        # q_value = self.model[ACTIONS[self_action]].predict([features])
+        # new_q_value = np.max(q_values_next)
+        # update = q_value + LEARNING_RATE * (reward + DISCOUNT_FACTOR * new_q_value - q_value)
+        # self.model[ACTIONS[self_action]].partial_fit([features], update)
+
+        # SARSA
+        # next_action = act(self, new_game_state)
+        # new_q_value = self.model[ACTIONS[next_action]].predict([next_features])
+        # update = q_value + LEARNING_RATE * (reward + DISCOUNT_FACTOR * new_q_value - q_value)
+        # self.model[ACTIONS[self_action]].partial_fit([features], update)
+        # self_action = next_action
+    elif not new_game_state:
+        features = state_to_features(old_game_state)
+        self.model[ACTIONS[self_action]].partial_fit([features], [reward])
+
 
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
@@ -81,15 +110,16 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     """
     self.logger.debug(f'Encountered event(s) {", ".join(map(repr, events))} in final step')
 
-    # Store the model
-    with open("jessi-saved-model.pt", "wb") as file:
-        pickle.dump(self.model, file)
+    reward = reward_from_events(self, events)
+    self.all_rewards.append(reward)
+    do_learning(self, None, last_game_state, reward, last_action)
 
-    with open("rewards/statistics", "a") as f:
-        for reward in self.all_rewards:
-            f.writelines(str(reward)+ "\n")
-    self.all_rewards = []
+    # reset this value if bomb dropped before dead
+    self.dropped_bomb = False
 
+    save_model(self)
+    end_statistics(self, events)
+    save_rewards(self)
 
 def reward_from_events(self, events: List[str]) -> int:
     """
@@ -99,22 +129,29 @@ def reward_from_events(self, events: List[str]) -> int:
     certain behavior.
     """
     game_rewards = {
-        e.MOVED_LEFT: -1,
-        e.MOVED_RIGHT: -1,
-        e.MOVED_UP: -1,
-        e.MOVED_DOWN: -1,
-        e.WAITED: -10,
+        e.MOVED_LEFT: 1,
+        e.MOVED_RIGHT: 1,
+        e.MOVED_UP: 1,
+        e.MOVED_DOWN: 1,
+        e.WAITED: -1,
         e.INVALID_ACTION: -10,
         e.BOMB_EXPLODED: 0,
-        e.BOMB_DROPPED: 1,
-        e.CRATE_DESTROYED: 50,
+        e.BOMB_DROPPED: -10,
+        e.CRATE_DESTROYED: 100,
         e.COIN_FOUND: 10,
         e.COIN_COLLECTED: 1000,
         e.KILLED_OPPONENT: 1000,
-        e.KILLED_SELF: -1200,
-        e.GOT_KILLED: -1000,
+        e.KILLED_SELF: 0,
+        e.GOT_KILLED: 0,
         e.OPPONENT_ELIMINATED: 0,
-        e.SURVIVED_ROUND: 0
+        e.SURVIVED_ROUND: 0,
+        DROP_BOMB_NEAR_CRATE: 15,
+        DID_NOT_ESCAPE: -100,
+        #CAN_NOT_ESCAPE: -100
+        #COIN_NOT_REACHABLE: -20,
+        DISTANCE_2: -1,
+        DISTANCE_1: -2,
+        DISTANCE_0: -3
     }
     reward_sum = 0
     for event in events:

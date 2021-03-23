@@ -5,7 +5,10 @@ import random
 import numpy as np
 from sklearn.linear_model import SGDRegressor
 
+from agent_code.my_function_approximation_agent_2.features import state_to_features
+
 ACTIONS = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'WAIT', 'BOMB']
+MODEL_FILE = "jessi-saved-model.pt"
 
 
 def setup(self):
@@ -28,13 +31,24 @@ def setup(self):
         self.model = []
         for _ in range(len(ACTIONS)):
             model = SGDRegressor(learning_rate="constant")
-            model.partial_fit([np.zeros(8)], [0])
+            model.partial_fit([np.zeros(86)], [0])
             self.model.append(model)
     else:
         self.logger.info("Loading model from saved state.")
-        with open("jessi-saved-model.pt", "rb") as file:
+        with open(MODEL_FILE, "rb") as file:
             self.model = pickle.load(file)
+    self.epsilon = .1
 
+    # if not self.train:
+    #     handler = logging.StreamHandler(sys.stdout)
+    #     handler.setLevel(logging.DEBUG)
+    #     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    #     handler.setFormatter(formatter)
+    #     self.logger.addHandler(handler)
+    #
+    # file_handler = logging.FileHandler(f"./logs/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log")
+    # file_handler.setLevel(logging.DEBUG)
+    # self.logger.addHandler(file_handler)
 
 def act(self, game_state: dict) -> str:
     """
@@ -45,91 +59,14 @@ def act(self, game_state: dict) -> str:
     :param game_state: The dictionary that describes everything on the board.
     :return: The action to take as a string.
     """
-    random_prob = .1
-    # exploration:
-    if self.train and random.random() < random_prob:
+    if self.train and random.random() < self.epsilon:
         self.logger.debug("Choosing action purely at random.")
-        # 80%: walk in any direction. 10% wait. 10% bomb.
         return np.random.choice(ACTIONS, p=[.2, .2, .2, .2, .1, .1])
     else:
         self.logger.debug("Querying model for action.")
         features = state_to_features(game_state)
-        action =  ACTIONS[np.argmax(np.array([m.predict([features])[0] for m in self.model]))]
+        #print(features)
+        #print(np.array([m.predict([features])[0] for m in self.model]))
+        action = ACTIONS[np.argmax(np.array([m.predict([features])[0] for m in self.model]))]
         print(action)
         return action
-
-
-
-def directions_to_nearest_coins(coins, x, y):
-    directions = [0, 0, 0, 0]
-    if coins:
-        distances = np.sqrt((np.asarray(coins)[:, 0] - x) ** 2 + (np.asarray(coins)[:, 1] - y) ** 2)
-        nearest_idx = np.argmin(distances)
-        nearest_coin = coins[nearest_idx]
-        if (nearest_coin[0] - x) < 0:
-            directions[0] = 1
-        elif (nearest_coin[0] - x) > 0:
-            directions[1] = 1
-        if (nearest_coin[1] - y) < 0:
-            directions[2] = 1
-        elif (nearest_coin[1] - y) > 0:
-            directions[3] = 1
-    return directions
-
-def directions_to_wall(arena, x,y):
-    directions = [1, 1, 1, 1]
-    if arena[x+1,y] == -1:
-        directions[0] = 0
-    if arena[x-1, y] == -1:
-        directions[1] = 0
-    if arena[x, y+1] == -1:
-        directions[2] = 0
-    if arena[x, y-1] == -1:
-        directions[3] = 0
-    return directions
-
-
-def state_to_features(game_state: dict) -> np.array:
-    """
-    *This is not a required function, but an idea to structure your code.*
-
-    Converts the game state to the input of your model, i.e.
-    a feature vector.
-
-    You can find out about the state of the game environment via game_state,
-    which is a dictionary. Consult 'get_state_for_agent' in environment.py to see
-    what it contains.
-
-    :param game_state:  A dictionary describing the current game board.
-    :return: np.array
-    """
-    # This is the dict before the game begins and after it ends
-    if game_state is None:
-        return None
-
-    # For example, you could construct several channels of equal shape, ...
-    arena = game_state['field']
-    _, score, bombs_left, (x, y) = game_state['self']
-    bombs = game_state['bombs']
-    explosion_map = game_state['explosion_map']
-    others = [xy for (n, s, b, xy) in game_state['others']]
-    coins = game_state['coins']
-
-    coin_map = np.zeros_like(arena)
-    coin_map[tuple(np.array(coins).T)] = 1
-
-    self_map = np.full(arena.shape, -1)
-    self_map[x,y] = int(bombs_left)
-
-
-    channels = []
-    #channels.append(1)
-    channels.append(directions_to_nearest_coins(coins, x, y))
-    channels.append(directions_to_wall(arena, x, y))
-    #channels.append(coin_map)
-    #channels.append(self_map)
-
-    # concatenate them as a feature tensor (they must have the same shape), ...
-    stacked_channels = np.stack(channels).reshape(-1)
-    # and return them as a vector
-    return stacked_channels # np.array2string(stacked_channels.reshape(-1))
