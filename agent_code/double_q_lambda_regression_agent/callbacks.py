@@ -34,9 +34,9 @@ def setup(self):
     file_handler.setLevel(logging.DEBUG)
     self.logger.addHandler(file_handler)
 
-    if not self.train and os.path.exists('a.pt'):
+    if not self.train and os.path.exists(MODEL_FILE):
         self.logger.info("Using existing model to play")
-        with open('a.pt', "rb") as file:
+        with open(MODEL_FILE, "rb") as file:
             self.model = pickle.load(file)
 
         self.is_fit = True

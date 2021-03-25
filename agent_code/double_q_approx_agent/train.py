@@ -9,10 +9,10 @@ from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
 
 import events as e
-from agent_code.double_q_lambda_approx_agent.callbacks import MODEL_FILE, POSSIBLE_ACTIONS
-from agent_code.double_q_lambda_approx_agent.custom_events import POTENTIAL_TO_COLLECT_COIN, POTENTIAL_TO_DIE_BY_BOMB, \
+from agent_code.double_q_approx_agent.callbacks import MODEL_FILE, POSSIBLE_ACTIONS
+from agent_code.double_q_approx_agent.custom_events import POTENTIAL_TO_COLLECT_COIN, POTENTIAL_TO_DIE_BY_BOMB, \
     POTENTIAL_TO_DIE_BY_EXPLOSION
-from agent_code.double_q_lambda_approx_agent.train_utils import fit_models_no_augment, fit_models_augmented_data, \
+from agent_code.double_q_approx_agent.train_utils import fit_models_no_augment, fit_models_augmented_data, \
     events_from_state, LEARNING_RATE
 
 ROUNDS_TO_UPDATE_MODEL = 200
@@ -62,10 +62,6 @@ def setup_training(self):
 
     self.learning_rate = LEARNING_RATE
     self.scaler = StandardScaler()
-
-    self.eligibility_traces = {}
-    for action in POSSIBLE_ACTIONS:
-        self.eligibility_traces[action] = OrderedDict()
 
     self.round_count = 0
 

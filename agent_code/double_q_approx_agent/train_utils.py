@@ -1,8 +1,8 @@
 import numpy as np
 
-from agent_code.double_q_lambda_approx_agent.callbacks import POSSIBLE_ACTIONS, state_to_features, get_nearest_coin, \
+from agent_code.double_q_approx_agent.callbacks import POSSIBLE_ACTIONS, state_to_features, get_nearest_coin, \
     get_discrete_distance, get_nearest_bomb, get_nearest_explosion
-from agent_code.double_q_lambda_approx_agent.custom_events import POTENTIAL_TO_COLLECT_COIN, POTENTIAL_TO_DIE_BY_BOMB, \
+from agent_code.double_q_approx_agent.custom_events import POTENTIAL_TO_COLLECT_COIN, POTENTIAL_TO_DIE_BY_BOMB, \
     POTENTIAL_TO_DIE_BY_EXPLOSION
 
 LEARNING_RATE = 0.5
@@ -10,8 +10,6 @@ MIN_LEARNING_RATE = 0.1
 LEARNING_RATE_DECAY = 0.95
 DISCOUNT = 0.8
 LAMBDA = 0.5
-
-KEEP_N_ELIGIBILITY_TRACES_PER_ACTION = 10
 
 
 def feature_augmentation(features):
@@ -155,9 +153,6 @@ def fit_models_augmented_data(self, old_game_state, action, new_game_state, rewa
         action_instance = augmented_action[idx][0]
         new_features_reshaped = None if augmented_new is None else augmented_new[idx].reshape(1, -1)
 
-        self.eligibility_traces[action] = update_eligibility_trace_dict(
-            self.eligibility_traces[action], old_features.tostring(), old_features_reshaped)
-
         fit(self, old_features_reshaped, action_instance, new_features_reshaped, reward, last_act_was_exploration)
 
 
@@ -167,9 +162,6 @@ def fit_models_no_augment(self, old_game_state, action, new_game_state, reward, 
 
     old_features_reshaped = old_features.reshape(1, -1)
     new_features_reshaped = None if new_features is None else new_features.reshape(-1, 1)
-
-    self.eligibility_traces[action] = update_eligibility_trace_dict(
-        self.eligibility_traces[action], old_features.tostring(), old_features_reshaped)
 
     fit(self, old_features_reshaped, action, new_features_reshaped, reward, last_act_was_exploration)
 
@@ -190,43 +182,7 @@ def fit(self, old_game_features, action, new_game_features, reward, last_act_was
         q_update_a = self.learning_rate * reward
         q_update_b = self.learning_rate * reward
 
-    # for use without eligibility traces:
-    # self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features, [model_a_old_q_value + q_update_a])
-    # self.q_b_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features, [model_b_old_q_value + q_update_b])
-
-    for action_idx, action in enumerate(POSSIBLE_ACTIONS):
-        trace_dict = self.eligibility_traces[action]
-        for key, value in trace_dict.items():
-            features = value['features']
-            eligibility_value = value['eligibility_value']
-
-            q_value_a = self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].predict(features)
-            target_q_a = q_value_a + q_update_a * eligibility_value
-
-            q_value_b = self.q_b_learn.estimators_[POSSIBLE_ACTIONS.index(action)].predict(features)
-            target_q_b = q_value_b + q_update_b * eligibility_value
-
-            self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(features, target_q_a)
-            self.q_b_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(features, target_q_b)
-
-            if last_act_was_exploration:
-                self.eligibility_traces[action][key] = {'features': features, 'eligibility_value': 0}
-            else:
-                self.eligibility_traces[action][key] = {'features': features, 'eligibility_value': eligibility_value * DISCOUNT * LAMBDA}
+    self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features, [model_a_old_q_value + q_update_a])
+    self.q_b_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features, [model_b_old_q_value + q_update_b])
 
     self.is_fit = True
-
-
-def update_eligibility_trace_dict(eligibility_trace_dict, state_key, features):
-    if state_key in eligibility_trace_dict:
-        # existing key, move to front and increment
-        eligibility_trace_dict.move_to_end(state_key)
-        current = eligibility_trace_dict[state_key]
-        eligibility_trace_dict[state_key] = {'features': features, 'eligibility_value': current['eligibility_value'] + 1}
-    else:
-        # new key, remove oldest item if max size was reached and insert new key
-        if len(eligibility_trace_dict) >= KEEP_N_ELIGIBILITY_TRACES_PER_ACTION:
-            eligibility_trace_dict.popitem(False)
-        eligibility_trace_dict[state_key] = {'features': features, 'eligibility_value': 1}
-
-    return eligibility_trace_dict
