@@ -1,3 +1,4 @@
+from collections import deque
 from datetime import datetime
 import logging
 import sys
@@ -11,9 +12,12 @@ from sklearn.preprocessing import MinMaxScaler, PolynomialFeatures
 POSSIBLE_ACTIONS = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'WAIT', 'BOMB']
 MODEL_FILE = 'weights.pt'
 
-EXPLORATION_RATE = 0.7
-MIN_EXPLORATION_RATE = 0.05
-EXPLORATION_RATE_DECAY = 0.97
+EXPLORATION_RATE = 0.75
+MIN_EXPLORATION_RATE = 0.15
+
+
+FEATURE_LENGTH = 496
+# FEATURE_LENGTH = 30*3
 
 
 def setup(self):
@@ -23,7 +27,7 @@ def setup(self):
     if self.train:
         self.exploration_rate = EXPLORATION_RATE
     else:
-        self.exploration_rate = MIN_EXPLORATION_RATE
+        self.exploration_rate = 0.05
 
     if not self.train:
         handler = logging.StreamHandler(sys.stdout)
@@ -43,30 +47,40 @@ def setup(self):
 
         self.is_fit = True
 
+    self.feature_memory = deque(maxlen=2)
+
 
 def act(self, game_state: dict) -> str:
+    if game_state['step'] == 1:
+        self.feature_memory = reset_memory(self.feature_memory)
+
+    features, self.feature_memory = state_to_features(game_state, self.feature_memory)
+    if self.train:
+        self.logger.debug(f"Current features: {features}")
+
     if not self.is_fit or np.random.rand() < self.exploration_rate:
         # explore
-        self.logger.debug("Exploring random action")
         action = np.random.choice(POSSIBLE_ACTIONS, p=[.2, .2, .2, .2, .1, .1])
+        self.logger.debug(f"Exploring random action, took action {action}")
         self.last_act_was_exploration = True
     else:
         # exploit
         q = self.q if not self.train else self.q_a_predict
         assert q is not None, "Playing does not work without weights!"
 
-        self.logger.debug("Exploiting (predict actions)")
-        action = POSSIBLE_ACTIONS[np.argmax(q.predict(state_to_features(game_state).reshape(1, -1))[0])]
+        actions = q.predict(features)[0]
+        action = POSSIBLE_ACTIONS[np.argmax(actions)]
+        self.logger.debug(f"Exploiting (predict actions), took action {action}")
         self.last_act_was_exploration = False
 
-    self.exploration_rate *= EXPLORATION_RATE_DECAY
-    self.exploration_rate = max(self.exploration_rate, 0.1)
-
-    self.logger.debug(f"Took action {action}")
     return action
 
 
-def state_to_features(game_state):
+def state_to_features(game_state, feature_memory):
+    all_features = []
+    for features in feature_memory:
+        all_features += features
+
     field = game_state['field'].T
 
     # field[field == 0] = (game_state['explosion_map'][field == 0] + 20)
@@ -78,11 +92,22 @@ def state_to_features(game_state):
     walls_and_crates_in_direction = [1 if field[self_x][self_y - 1] == -1 else 2 if field[self_x][self_y - 1] == 1 else 0,
                                      1 if field[self_x + 1][self_y] == -1 else 2 if field[self_x + 1][self_y] == 1 else 0,
                                      1 if field[self_x][self_y + 1] == -1 else 2 if field[self_x][self_y + 1] == 1 else 0,
-                                     1 if field[self_x - 1][self_y] == -1 else 2 if field[self_x - 1][self_y] == 1 else 0]
+                                     1 if field[self_x - 1][self_y] == -1 else 2 if field[self_x - 1][self_y] == 1 else 0,
+
+                                     1 if field[self_x - 1][self_y - 1] == -1 else 2 if field[self_x - 1][self_y - 1] == 1 else 0,
+                                     1 if field[self_x + 1][self_y + 1] == -1 else 2 if field[self_x + 1][self_y + 1] == 1 else 0,
+                                     1 if field[self_x - 1][self_y + 1] == -1 else 2 if field[self_x - 1][self_y + 1] == 1 else 0,
+                                     1 if field[self_x + 1][self_y - 1] == -1 else 2 if field[self_x + 1][self_y - 1] == 1 else 0,
+
+                                     1 if self_y == 1 else 1 if field[self_x][self_y - 2] == -1 else 2 if field[self_x][self_y - 2] == 1 else 0,
+                                     1 if self_x == 15 else 1 if field[self_x + 2][self_y] == -1 else 2 if field[self_x + 2][self_y] == 1 else 0,
+                                     1 if self_y == 15 else 1 if field[self_x][self_y + 2] == -1 else 2 if field[self_x][self_y + 2] == 1 else 0,
+                                     1 if self_x == 1 else 1 if field[self_x - 1][self_y] == -1 else 2 if field[self_x - 2][self_y] == 1 else 0
+                                     ]
 
     [coin_x, coin_y], coin_dist = get_nearest_coin(game_state['coins'], (self_x, self_y))
     _, coin_dir = get_dir(coin_x, coin_y, self_x, self_y)
-    coin_dist_discrete = get_discrete_distance(coin_dist)
+    # coin_dist_discrete = get_discrete_distance(coin_dist)
 
     [bomb_x, bomb_y], bomb_dist = get_nearest_bomb(game_state['bombs'], (self_x, self_y))
     _, bomb_dir = get_dir(bomb_x, bomb_y, self_x, self_y)
@@ -98,14 +123,19 @@ def state_to_features(game_state):
 
     can_lay_bomb = [1 if bombs_left else 0]
 
-    # TODO: introduce some kind on non-linearity?
-    # TODO: explosion distance not important, just don't run into it
-    # TODO: inside blast radius to nearest bomb (all bombs?)
+    # TODO: inside blast radius to nearest bomb (all bombs?)?
 
-    min_maxed_data = MinMaxScaler().fit_transform(np.array(walls_and_crates_in_direction + coin_dir + bomb_dir + explosion_dir + crate_dir + can_lay_bomb).reshape(-1, 1))
-    features = PolynomialFeatures().fit_transform(min_maxed_data.T)
+    current_features = walls_and_crates_in_direction + coin_dir + bomb_dir + explosion_dir + crate_dir + can_lay_bomb + [game_state['step'] / 100]
+    feature_memory.append(current_features)
 
-    return features
+    all_features += current_features
+
+    features = np.array(current_features)
+
+    features = PolynomialFeatures(include_bias=True).fit_transform(features.reshape(1, -1))
+    features = MinMaxScaler(copy=False).fit_transform(features.reshape(-1, 1))
+
+    return features.reshape(1, -1), feature_memory
 
 
 def get_nearest_coin(coin_map, self_pos):
@@ -134,33 +164,15 @@ def get_dir(x, y, self_x, self_y):
     if pos_delta_x > 0:
         direction[1] = pos_delta_x  # "RIGHT"
     elif pos_delta_x < 0:
-        direction[3] = -pos_delta_x   # "LEFT"
+        direction[3] = pos_delta_x   # "LEFT"
 
     # top or bottom
     if pos_delta_y > 0:
         direction[2] = pos_delta_y   # "DOWN"
     elif pos_delta_y < 0:
-        direction[0] = -pos_delta_y   # "UP"
+        direction[0] = pos_delta_y   # "UP"
 
     return True, direction
-
-
-def get_discrete_distance(dist):
-    if dist is None or dist > 10:
-        return None
-
-    distance = [0, 0, 0, 0]  # almost on top, near, middle, far
-
-    if dist > 3:
-        distance[3] = 1
-    elif dist > 2:
-        distance[2] = 1
-    elif dist > 1:
-        distance[1] = 1
-    else:
-        distance[0] = 1
-
-    return distance
 
 
 def get_nearest_crate(field, self_pos):
@@ -206,3 +218,10 @@ def get_nearest_explosion(explosion_field, self_pos):
             min_x, min_y = x, y
 
     return (min_x, min_y), min_dist
+
+
+def reset_memory(memory):
+    for i in range(memory.maxlen):
+        memory.append(list(np.zeros(FEATURE_LENGTH//(memory.maxlen+1))))
+
+    return memory

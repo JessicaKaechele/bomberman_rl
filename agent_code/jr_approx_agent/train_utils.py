@@ -1,112 +1,18 @@
 import numpy as np
 
 from agent_code.jr_approx_agent.callbacks import POSSIBLE_ACTIONS, state_to_features, get_nearest_coin, \
-    get_discrete_distance, get_nearest_bomb, get_nearest_explosion, get_nearest_crate
+    get_nearest_bomb, get_nearest_explosion, get_nearest_crate
 import agent_code.jr_approx_agent.custom_events as ce
+import events as e
 
 LEARNING_RATE = 0.5
 MIN_LEARNING_RATE = 0.1
-LEARNING_RATE_DECAY = 0.95
+LEARNING_RATE_DECAY = 0.995
 DISCOUNT = 0.8
 LAMBDA = 0.5
 
 USE_DOUBLE_Q = False
-KEEP_N_ELIGIBILITY_TRACES_PER_ACTION = 50
-
-
-def feature_augmentation(features):
-    # top, right, bottom, left
-    def rotate(feature_to_rotate):
-        result = np.empty_like(feature_to_rotate)
-        result[0] = feature_to_rotate[3]
-        result[1] = feature_to_rotate[0]
-        result[2] = feature_to_rotate[1]
-        result[3] = feature_to_rotate[2]
-        return result
-
-    def mirror(feature_to_mirror):
-        result = np.empty_like(feature_to_mirror)
-        result[0] = feature_to_mirror[2]
-        result[1] = feature_to_mirror[3]
-        result[2] = feature_to_mirror[0]
-        result[3] = feature_to_mirror[1]
-        return result
-
-    # mirror and rotate features, call before fit to get 8x the data!
-    all_augmentations = np.empty((8, features.shape[0]))
-
-    rotated_wall_dir = features[0:4]
-    rotated_coin_dir = features[4:8]
-    rotated_bomb_dir = features[8:12]
-    rotated_explosion_dir = features[12:16]
-    rotated_crate_dir = features[16:20]
-    for i in range(4):
-        rotated_wall_dir = rotate(rotated_wall_dir)
-        mirrored_wall_dir = mirror(rotated_wall_dir)
-        all_augmentations[i * 2 + 0][0:4] = rotated_wall_dir
-        all_augmentations[i * 2 + 1][0:4] = mirrored_wall_dir
-
-        rotated_coin_dir = rotate(rotated_coin_dir)
-        mirrored_coin_dir = mirror(rotated_coin_dir)
-        all_augmentations[i * 2 + 0][4:8] = rotated_coin_dir
-        all_augmentations[i * 2 + 1][4:8] = mirrored_coin_dir
-
-        rotated_bomb_dir = rotate(rotated_bomb_dir)
-        mirrored_bomb_dir = mirror(rotated_bomb_dir)
-        all_augmentations[i * 2 + 0][8:12] = rotated_bomb_dir
-        all_augmentations[i * 2 + 1][8:12] = mirrored_bomb_dir
-
-        rotated_explosion_dir = rotate(rotated_explosion_dir)
-        mirrored_explosion_dir = mirror(rotated_explosion_dir)
-        all_augmentations[i * 2 + 0][12:16] = rotated_explosion_dir
-        all_augmentations[i * 2 + 1][12:16] = mirrored_explosion_dir
-
-        rotated_crate_dir = rotate(rotated_crate_dir)
-        mirrored_crate_dir = mirror(rotated_crate_dir)
-        all_augmentations[i * 2 + 0][16:20] = rotated_crate_dir
-        all_augmentations[i * 2 + 1][16:20] = mirrored_crate_dir
-
-        all_augmentations[i * 2 + 0][20:] = features[20:]
-        all_augmentations[i * 2 + 1][20:] = features[20:]
-
-    return all_augmentations
-
-
-def action_augmentation(action):
-    # top, right, bottom, left
-    def rotate(action_to_rotate):
-        if action_to_rotate == "UP":
-            return "RIGHT"
-        elif action_to_rotate == "RIGHT":
-            return "DOWN"
-        elif action_to_rotate == "DOWN":
-            return "LEFT"
-        elif action_to_rotate == "LEFT":
-            return "UP"
-
-    def mirror(action_to_mirror):
-        if action_to_mirror == "UP":
-            return "DOWN"
-        elif action_to_mirror == "RIGHT":
-            return "LEFT"
-        elif action_to_mirror == "DOWN":
-            return "UP"
-        elif action_to_mirror == "LEFT":
-            return "RIGHT"
-
-    # mirror and rotate features, call before fit to get 8x the data!
-    all_augmentations = np.empty((8, 1), dtype=object)
-    if action == "WAIT" or action == "BOMB":
-        all_augmentations[:] = action
-    else:
-        rotated_action = action
-        for i in range(4):
-            rotated_action = rotate(rotated_action)
-            mirrored_action = mirror(rotated_action)
-            all_augmentations[i * 2 + 0] = rotated_action
-            all_augmentations[i * 2 + 1] = mirrored_action
-
-    return all_augmentations
+KEEP_N_ELIGIBILITY_TRACES_PER_ACTION = 100
 
 
 def events_from_state(new_game_state, events):
@@ -114,176 +20,167 @@ def events_from_state(new_game_state, events):
         return events
 
     _, _, _, new_pos = new_game_state['self']
-    distance_count = np.array([4, 3, 2, 1])
 
     def coin_event(current_events):
         _, distance = get_nearest_coin(new_game_state['coins'], new_pos)
-        discrete_dist = get_discrete_distance(distance)
 
-        if discrete_dist is None:
-            current_events += [ce.POTENTIAL_TO_NOT_COLLECT_COIN]
-        else:
-            distance_sum = np.multiply(distance_count, discrete_dist).sum()
-            current_events += list(np.repeat(ce.POTENTIAL_TO_COLLECT_COIN, distance_sum))
+        if distance is not None:
+            if distance >= 4:
+                distance_multiplier = min(distance - 3, 3)
+                current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_COLLECT_COIN, distance_multiplier))
+            else:
+                distance_multiplier = min(4 - distance, 3)
+                current_events += list(np.repeat(ce.POTENTIAL_TO_COLLECT_COIN, distance_multiplier))
 
         return current_events
 
     def bomb_event(current_events):
-        _, distance = get_nearest_bomb(new_game_state['bombs'], new_pos)
-        discrete_dist = get_discrete_distance(distance)
+        [bomb_x, bomb_y], distance = get_nearest_bomb(new_game_state['bombs'], new_pos)
 
-        if discrete_dist is None:
-            current_events += [ce.POTENTIAL_TO_NOT_DIE_BY_BOMB]
-        else:
-            distance_sum = np.multiply(distance_count, discrete_dist).sum()
-            current_events += list(np.repeat(ce.POTENTIAL_TO_DIE_BY_BOMB, distance_sum))
+        if distance is not None:
+            if bomb_x != new_pos[0] and bomb_y != new_pos[1]:
+                current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_DIE_BY_BOMB, 3))
+            elif distance >= 4:
+                distance_multiplier = min(distance - 3, 3)
+                current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_DIE_BY_BOMB, distance_multiplier))
+            else:
+                current_events += list(np.repeat(ce.POTENTIAL_TO_DIE_BY_BOMB, 3))
 
         return current_events
 
     def explosion_event(current_events):
         _, distance = get_nearest_explosion(new_game_state['explosion_map'], new_pos)
-        discrete_dist = get_discrete_distance(distance)
 
-        if discrete_dist is None:
-            current_events += [ce.POTENTIAL_TO_NOT_DIE_BY_EXPLOSION]
-        else:
-            distance_sum = np.multiply(distance_count, discrete_dist).sum()
-            current_events += list(np.repeat(ce.POTENTIAL_TO_DIE_BY_EXPLOSION, distance_sum))
+        if distance is not None:
+            if distance >= 2:
+                distance_multiplier = min(distance - 1, 3)
+                current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_DIE_BY_EXPLOSION, distance_multiplier))
+            else:
+                distance_multiplier = min(2 - distance, 3)
+                current_events += list(np.repeat(ce.POTENTIAL_TO_DIE_BY_EXPLOSION, distance_multiplier))
 
         return current_events
 
-    def crate_event(current_events):
-        _, distance = get_nearest_crate(new_game_state['field'], new_pos)
-        discrete_dist = get_discrete_distance(distance)
+    def crate_events(current_events):
+        create_pos, distance = get_nearest_crate(new_game_state['field'], new_pos)
 
-        if discrete_dist is None:
-            current_events += [ce.POTENTIAL_TO_NOT_EXPLODE_CRATE]
-        else:
-            distance_sum = np.multiply(distance_count, discrete_dist).sum()
-            current_events += list(np.repeat(ce.POTENTIAL_TO_EXPLODE_CRATE, distance_sum))
+        if distance is not None:
+            if distance >= 3:
+                distance_multiplier = min(distance - 2, 3)
+                current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_EXPLODE_CRATE, distance_multiplier))
+            else:
+                distance_multiplier = min(3 - distance, 3)
+                current_events += list(np.repeat(ce.POTENTIAL_TO_EXPLODE_CRATE, distance_multiplier))
+
+                if distance == 1 and e.BOMB_DROPPED in current_events:
+                    current_events += [ce.DROPPED_BOMB_NEAR_CRATE]
 
         return current_events
 
     events = coin_event(events)
     events = bomb_event(events)
     events = explosion_event(events)
-    events = crate_event(events)
+    events = crate_events(events)
 
     return events
 
 
-def fit_models_augmented_data(self, old_game_state, action, new_game_state, reward):
-    old_features = state_to_features(old_game_state)
-    new_features = None if new_game_state is None else state_to_features(new_game_state)
-
-    augmented_old = feature_augmentation(old_features)
-    augmented_new = None if new_features is None else feature_augmentation(new_features)
-
-    augmented_action = action_augmentation(action)
-
-    for idx, old_augmented_feature_instance in enumerate(augmented_old):
-        old_features_reshaped = old_augmented_feature_instance.reshape(1, -1)
-        action_instance = augmented_action[idx][0]
-        new_features_reshaped = None if augmented_new is None else augmented_new[idx].reshape(1, -1)
-
-        self.eligibility_traces[action] = update_eligibility_trace_dict(
-            self.eligibility_traces[action], old_features.tostring(), old_features_reshaped)
-
-        if USE_DOUBLE_Q:
-            fit_double_q(self, old_features_reshaped, action_instance, new_features_reshaped, reward)
-        else:
-            fit_q(self, old_features_reshaped, action_instance, new_features_reshaped, reward)
-
-
-def fit_models_no_augment(self, old_game_state, action, new_game_state, reward):
-    old_features = state_to_features(old_game_state)
-    new_features = None if new_game_state is None else state_to_features(new_game_state)
-
-    old_features_reshaped = old_features.reshape(1, -1)
-    new_features_reshaped = None if new_features is None else new_features.reshape(1, -1)
+def _fit_models(self, old_game_state, action, new_game_state, reward):
+    old_features, self.old_feature_memory = state_to_features(old_game_state, self.old_feature_memory)
+    new_features, self.new_feature_memory = (None, self.new_feature_memory) if new_game_state is None else \
+        state_to_features(new_game_state, self.new_feature_memory)
 
     self.eligibility_traces[action] = update_eligibility_trace_dict(
-        self.eligibility_traces[action], old_features.tostring(), old_features_reshaped)
+        self.eligibility_traces[action], hash(str(old_features.tostring())), old_features)
 
     if USE_DOUBLE_Q:
-        fit_double_q(self, old_features_reshaped, action, new_features_reshaped, reward)
+        fit_double_q(self, old_features, action, new_features, reward)
     else:
-        fit_q(self, old_features_reshaped, action, new_features_reshaped, reward)
+        fit_q(self, old_features, action, new_features, reward)
 
 
 def fit_double_q(self, old_game_features, action, new_game_features, reward):
-    model_a_old_q_value = self.q_a_predict.predict(old_game_features)[0][POSSIBLE_ACTIONS.index(action)]
-    model_b_old_q_value = self.q_b_predict.predict(old_game_features)[0][POSSIBLE_ACTIONS.index(action)]
+    def fit(q_a_predict, q_a_learn, q_b_predict, action_param):
+        model_a_old_q_value = q_a_predict.predict(old_game_features)[0][POSSIBLE_ACTIONS.index(action_param)]
 
-    if self.is_fit and new_game_features is not None:
-        model_a_new_q_values = self.q_a_predict.predict(new_game_features)[0]
-        model_b_new_q_values = self.q_b_predict.predict(new_game_features)[0]
+        if self.is_fit and new_game_features is not None:
+            model_a_new_q_values = q_a_predict.predict(new_game_features)[0]
+            model_b_new_q_values = q_b_predict.predict(new_game_features)[0]
 
-        q_update_a = self.learning_rate * (
-                reward + DISCOUNT * model_b_new_q_values[np.argmax(model_a_new_q_values)] - model_a_old_q_value)
-        q_update_b = self.learning_rate * (
-                reward + DISCOUNT * model_a_new_q_values[np.argmax(model_b_new_q_values)] - model_b_old_q_value)
+            q_update_a = self.learning_rate * (
+                    reward + DISCOUNT * model_b_new_q_values[np.argmax(model_a_new_q_values)] - model_a_old_q_value)
+        else:
+            q_update_a = self.learning_rate * reward
+
+        # q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features,
+        #                                                                        [model_a_old_q_value + q_update_a])
+
+        for action_idx, action_value in enumerate(POSSIBLE_ACTIONS):
+            trace_dict = self.eligibility_traces[action_value]
+            for key, value in trace_dict.items():
+                features = value['features']
+                eligibility_value = value['eligibility_value']
+
+                q_value = q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action_value)].predict(features)[0]
+                target_q_a = q_value + q_update_a * eligibility_value
+
+                q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action_value)].partial_fit(features, target_q_a)
+
+                if not self.last_act_was_exploration:
+                    self.eligibility_traces[action_value][key] = {'features': features,
+                                                                  'eligibility_value': eligibility_value * DISCOUNT * LAMBDA}
+                else:
+                    self.eligibility_traces[action_value][key] = {'features': features,
+                                                                  'eligibility_value': 0}
+
+        return q_a_predict, q_a_learn, q_b_predict
+
+    if np.random.rand() >= 0.5:
+        # update model a
+        self.q_a_predict, self.q_a_learn, self.q_b_predict = fit(self.q_a_predict, self.q_a_learn, self.q_b_predict, action)
     else:
-        q_update_a = self.learning_rate * reward
-        q_update_b = self.learning_rate * reward
-
-    # self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features, [model_a_old_q_value + q_update_a])
-    # self.q_b_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features, [model_b_old_q_value + q_update_b])
-
-    for action_idx, action in enumerate(POSSIBLE_ACTIONS):
-        trace_dict = self.eligibility_traces[action]
-        for key, value in trace_dict.items():
-            features = value['features']
-            eligibility_value = value['eligibility_value']
-
-            q_value_a = self.q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action)].predict(features)
-            target_q_a = q_value_a + q_update_a * eligibility_value
-
-            q_value_b = self.q_b_predict.estimators_[POSSIBLE_ACTIONS.index(action)].predict(features)
-            target_q_b = q_value_b + q_update_b * eligibility_value
-
-            self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(features, target_q_a)
-            self.q_b_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(features, target_q_b)
-
-            if self.last_act_was_exploration:
-                self.eligibility_traces[action][key] = {'features': features, 'eligibility_value': 0}
-            else:
-                self.eligibility_traces[action][key] = {'features': features,
-                                                        'eligibility_value': eligibility_value * DISCOUNT * LAMBDA}
+        # update model b
+        self.q_b_predict, self.q_b_learn, self.q_a_predict = fit(self.q_b_predict, self.q_b_learn, self.q_a_predict, action)
 
     self.is_fit = True
 
 
 def fit_q(self, old_game_features, action, new_game_features, reward):
     model_a_old_q_value = self.q_a_predict.predict(old_game_features)[0][POSSIBLE_ACTIONS.index(action)]
+    self.logger.debug(f"Prediction for old game state: {model_a_old_q_value}")
 
     if self.is_fit and new_game_features is not None:
         model_a_new_q_values = self.q_a_predict.predict(new_game_features)[0]
+        self.logger.debug(f"Prediction for new game state: {model_a_new_q_values}")
 
         q_update_a = self.learning_rate * (
                 reward + DISCOUNT * model_a_new_q_values[np.argmax(model_a_new_q_values)] - model_a_old_q_value)
     else:
         q_update_a = self.learning_rate * reward
 
+    # for no eligibility traces:
     # self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features,
     #                                                                        [model_a_old_q_value + q_update_a])
 
-    for action_idx, action in enumerate(POSSIBLE_ACTIONS):
-        trace_dict = self.eligibility_traces[action]
+    self.logger.debug(f"Current q_update value: {q_update_a}")
+
+    for action_idx, action_value in enumerate(POSSIBLE_ACTIONS):
+        trace_dict = self.eligibility_traces[action_value]
         for key, value in trace_dict.items():
             features = value['features']
             eligibility_value = value['eligibility_value']
 
-            q_value_a = self.q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action)].predict(features)
-            target_q_a = q_value_a + q_update_a * eligibility_value
+            q_value = self.q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action_value)].predict(features)
+            target_q_a = q_value + q_update_a * eligibility_value
 
-            self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(features, target_q_a)
+            self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action_value)].partial_fit(features, target_q_a)
 
-            if self.last_act_was_exploration:
-                self.eligibility_traces[action][key] = {'features': features, 'eligibility_value': 0}
+            if not self.last_act_was_exploration:
+                self.eligibility_traces[action_value][key] = {'features': features,
+                                                              'eligibility_value': eligibility_value * DISCOUNT * LAMBDA}
             else:
-                self.eligibility_traces[action][key] = {'features': features,
-                                                        'eligibility_value': eligibility_value * DISCOUNT * LAMBDA}
+                self.eligibility_traces[action_value][key] = {'features': features,
+                                                              'eligibility_value': 0}
 
     self.is_fit = True
 
@@ -293,11 +190,13 @@ def update_eligibility_trace_dict(eligibility_trace_dict, state_key, features):
         # existing key, move to front and increment
         eligibility_trace_dict.move_to_end(state_key)
         current = eligibility_trace_dict[state_key]
-        eligibility_trace_dict[state_key] = {'features': features, 'eligibility_value': current['eligibility_value'] + 1}
+        eligibility_trace_dict[state_key] = {'features': features,
+                                             'eligibility_value': current['eligibility_value'] + 1}
     else:
         # new key, remove oldest item if max size was reached and insert new key
-        if len(eligibility_trace_dict) >= KEEP_N_ELIGIBILITY_TRACES_PER_ACTION:
+        while len(eligibility_trace_dict) >= KEEP_N_ELIGIBILITY_TRACES_PER_ACTION:
             eligibility_trace_dict.popitem(False)
+
         eligibility_trace_dict[state_key] = {'features': features, 'eligibility_value': 1}
 
     return eligibility_trace_dict
