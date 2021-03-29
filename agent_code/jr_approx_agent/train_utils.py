@@ -9,16 +9,17 @@ LEARNING_RATE = 0.5
 MIN_LEARNING_RATE = 0.1
 LEARNING_RATE_DECAY = 0.995
 DISCOUNT = 0.8
-LAMBDA = 0.5
+LAMBDA = 0.85
 
 USE_DOUBLE_Q = False
 KEEP_N_ELIGIBILITY_TRACES_PER_ACTION = 100
 
 
-def events_from_state(new_game_state, events):
+def events_from_state(old_game_state, new_game_state, events):
     if new_game_state is None:
         return events
 
+    _, _, _, old_pos = old_game_state['self']
     _, _, _, new_pos = new_game_state['self']
 
     def coin_event(current_events):
@@ -62,18 +63,25 @@ def events_from_state(new_game_state, events):
         return current_events
 
     def crate_events(current_events):
+        old_create_pos, old_distance = get_nearest_crate(new_game_state['field'], old_pos)
         create_pos, distance = get_nearest_crate(new_game_state['field'], new_pos)
 
+        if old_distance is not None and distance is not None:
+            if old_distance < distance:
+                current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_EXPLODE_CRATE, 3))
+            elif old_distance > distance:
+                current_events += list(np.repeat(ce.POTENTIAL_TO_EXPLODE_CRATE, 3))
+
         if distance is not None:
-            if distance >= 3:
+            if distance >= 4:
                 distance_multiplier = min(distance - 2, 3)
                 current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_EXPLODE_CRATE, distance_multiplier))
             else:
                 distance_multiplier = min(3 - distance, 3)
                 current_events += list(np.repeat(ce.POTENTIAL_TO_EXPLODE_CRATE, distance_multiplier))
 
-                if distance == 1 and e.BOMB_DROPPED in current_events:
-                    current_events += [ce.DROPPED_BOMB_NEAR_CRATE]
+            if distance == 1 and e.BOMB_DROPPED in current_events:
+                current_events += [ce.DROPPED_BOMB_NEAR_CRATE]
 
         return current_events
 
@@ -86,9 +94,8 @@ def events_from_state(new_game_state, events):
 
 
 def _fit_models(self, old_game_state, action, new_game_state, reward):
-    old_features, self.old_feature_memory = state_to_features(old_game_state, self.old_feature_memory)
-    new_features, self.new_feature_memory = (None, self.new_feature_memory) if new_game_state is None else \
-        state_to_features(new_game_state, self.new_feature_memory)
+    old_features = state_to_features(self, old_game_state)
+    new_features = None if new_game_state is None else state_to_features(self, new_game_state)
 
     self.eligibility_traces[action] = update_eligibility_trace_dict(
         self.eligibility_traces[action], hash(str(old_features.tostring())), old_features)
@@ -112,26 +119,26 @@ def fit_double_q(self, old_game_features, action, new_game_features, reward):
         else:
             q_update_a = self.learning_rate * reward
 
-        # q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features,
-        #                                                                        [model_a_old_q_value + q_update_a])
+        q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features,
+                                                                               [model_a_old_q_value + q_update_a])
 
-        for action_idx, action_value in enumerate(POSSIBLE_ACTIONS):
-            trace_dict = self.eligibility_traces[action_value]
-            for key, value in trace_dict.items():
-                features = value['features']
-                eligibility_value = value['eligibility_value']
-
-                q_value = q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action_value)].predict(features)[0]
-                target_q_a = q_value + q_update_a * eligibility_value
-
-                q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action_value)].partial_fit(features, target_q_a)
-
-                if not self.last_act_was_exploration:
-                    self.eligibility_traces[action_value][key] = {'features': features,
-                                                                  'eligibility_value': eligibility_value * DISCOUNT * LAMBDA}
-                else:
-                    self.eligibility_traces[action_value][key] = {'features': features,
-                                                                  'eligibility_value': 0}
+        # for action_idx, action_value in enumerate(POSSIBLE_ACTIONS):
+        #     trace_dict = self.eligibility_traces[action_value]
+        #     for key, value in trace_dict.items():
+        #         features = value['features']
+        #         eligibility_value = value['eligibility_value']
+        #
+        #         q_value = q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action_value)].predict(features)
+        #         target_q_a = q_value + q_update_a * eligibility_value
+        #
+        #         q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action_value)].partial_fit(features, target_q_a)
+        #
+        #         if not self.last_act_was_exploration:
+        #             self.eligibility_traces[action_value][key] = {'features': features,
+        #                                                           'eligibility_value': eligibility_value * LAMBDA}
+        #         else:
+        #             self.eligibility_traces[action_value][key] = {'features': features,
+        #                                                           'eligibility_value': 0}
 
         return q_a_predict, q_a_learn, q_b_predict
 
@@ -159,44 +166,44 @@ def fit_q(self, old_game_features, action, new_game_features, reward):
         q_update_a = self.learning_rate * reward
 
     # for no eligibility traces:
-    # self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features,
-    #                                                                        [model_a_old_q_value + q_update_a])
+    self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action)].partial_fit(old_game_features,
+                                                                           [model_a_old_q_value + q_update_a])
 
     self.logger.debug(f"Current q_update value: {q_update_a}")
 
-    for action_idx, action_value in enumerate(POSSIBLE_ACTIONS):
-        trace_dict = self.eligibility_traces[action_value]
-        for key, value in trace_dict.items():
-            features = value['features']
-            eligibility_value = value['eligibility_value']
-
-            q_value = self.q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action_value)].predict(features)
-            target_q_a = q_value + q_update_a * eligibility_value
-
-            self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action_value)].partial_fit(features, target_q_a)
-
-            if not self.last_act_was_exploration:
-                self.eligibility_traces[action_value][key] = {'features': features,
-                                                              'eligibility_value': eligibility_value * DISCOUNT * LAMBDA}
-            else:
-                self.eligibility_traces[action_value][key] = {'features': features,
-                                                              'eligibility_value': 0}
+    # for action_idx, action_value in enumerate(POSSIBLE_ACTIONS):
+    #     trace_dict = self.eligibility_traces[action_value]
+    #     for key, value in trace_dict.items():
+    #         features = value['features']
+    #         eligibility_value = value['eligibility_value']
+    #
+    #         q_value = self.q_a_predict.estimators_[POSSIBLE_ACTIONS.index(action_value)].predict(features)
+    #         target_q_a = q_value + q_update_a * eligibility_value
+    #
+    #         self.q_a_learn.estimators_[POSSIBLE_ACTIONS.index(action_value)].partial_fit(features, target_q_a)
+    #
+    #         if not self.last_act_was_exploration:
+    #             self.eligibility_traces[action_value][key] = {'features': features,
+    #                                                           'eligibility_value': eligibility_value * LAMBDA}
+    #         else:
+    #             self.eligibility_traces[action_value][key] = {'features': features,
+    #                                                           'eligibility_value': 0}
 
     self.is_fit = True
 
 
 def update_eligibility_trace_dict(eligibility_trace_dict, state_key, features):
-    if state_key in eligibility_trace_dict:
-        # existing key, move to front and increment
-        eligibility_trace_dict.move_to_end(state_key)
-        current = eligibility_trace_dict[state_key]
-        eligibility_trace_dict[state_key] = {'features': features,
-                                             'eligibility_value': current['eligibility_value'] + 1}
-    else:
-        # new key, remove oldest item if max size was reached and insert new key
-        while len(eligibility_trace_dict) >= KEEP_N_ELIGIBILITY_TRACES_PER_ACTION:
-            eligibility_trace_dict.popitem(False)
-
-        eligibility_trace_dict[state_key] = {'features': features, 'eligibility_value': 1}
+    # if state_key in eligibility_trace_dict:
+    #     # existing key, move to front and increment
+    #     eligibility_trace_dict.move_to_end(state_key)
+    #     current = eligibility_trace_dict[state_key]
+    #     eligibility_trace_dict[state_key] = {'features': features,
+    #                                          'eligibility_value': current['eligibility_value'] + 1}
+    # else:
+    #     # new key, remove oldest item if max size was reached and insert new key
+    #     while len(eligibility_trace_dict) >= KEEP_N_ELIGIBILITY_TRACES_PER_ACTION:
+    #         eligibility_trace_dict.popitem(False)
+    #
+    #     eligibility_trace_dict[state_key] = {'features': features, 'eligibility_value': 1}
 
     return eligibility_trace_dict

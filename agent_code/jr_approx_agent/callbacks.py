@@ -16,8 +16,8 @@ EXPLORATION_RATE = 0.75
 MIN_EXPLORATION_RATE = 0.15
 
 
-FEATURE_LENGTH = 496
-# FEATURE_LENGTH = 30*3
+FEATURE_LENGTH = 60031
+# FEATURE_LENGTH = 281
 
 
 def setup(self):
@@ -47,20 +47,22 @@ def setup(self):
 
         self.is_fit = True
 
-    self.feature_memory = deque(maxlen=2)
+    # self.feature_memory = deque(maxlen=2)
+    self.previous_crate_dir = None
 
 
 def act(self, game_state: dict) -> str:
     if game_state['step'] == 1:
-        self.feature_memory = reset_memory(self.feature_memory)
+        self.previous_crate_dir = None
 
-    features, self.feature_memory = state_to_features(game_state, self.feature_memory)
-    if self.train:
-        self.logger.debug(f"Current features: {features}")
+    features = state_to_features(self, game_state)
+
+    if self.train and game_state['step'] % 5 == 0 and game_state['round'] % 10 == 0:
+        self.logger.debug(f"Features for round {game_state['round']}, step {game_state['step']}: {features}")
 
     if not self.is_fit or np.random.rand() < self.exploration_rate:
         # explore
-        action = np.random.choice(POSSIBLE_ACTIONS, p=[.2, .2, .2, .2, .1, .1])
+        action = np.random.choice(POSSIBLE_ACTIONS)
         self.logger.debug(f"Exploring random action, took action {action}")
         self.last_act_was_exploration = True
     else:
@@ -76,10 +78,10 @@ def act(self, game_state: dict) -> str:
     return action
 
 
-def state_to_features(game_state, feature_memory):
-    all_features = []
-    for features in feature_memory:
-        all_features += features
+def state_to_features(self, game_state):
+    # all_features = []
+    # for features in self.feature_memory:
+    #     all_features += features
 
     field = game_state['field'].T
 
@@ -89,21 +91,35 @@ def state_to_features(game_state, feature_memory):
     # others = game_state['others']
 
     field[self_x][self_y] = 5
-    walls_and_crates_in_direction = [1 if field[self_x][self_y - 1] == -1 else 2 if field[self_x][self_y - 1] == 1 else 0,
-                                     1 if field[self_x + 1][self_y] == -1 else 2 if field[self_x + 1][self_y] == 1 else 0,
-                                     1 if field[self_x][self_y + 1] == -1 else 2 if field[self_x][self_y + 1] == 1 else 0,
-                                     1 if field[self_x - 1][self_y] == -1 else 2 if field[self_x - 1][self_y] == 1 else 0,
+    walls_in_direction = [1 if field[self_x][self_y - 1] == -1 else 0,
+                             1 if field[self_x + 1][self_y] == -1 else 0,
+                             1 if field[self_x][self_y + 1] == -1 else 0,
+                             1 if field[self_x - 1][self_y] == -1 else 0,
 
-                                     1 if field[self_x - 1][self_y - 1] == -1 else 2 if field[self_x - 1][self_y - 1] == 1 else 0,
-                                     1 if field[self_x + 1][self_y + 1] == -1 else 2 if field[self_x + 1][self_y + 1] == 1 else 0,
-                                     1 if field[self_x - 1][self_y + 1] == -1 else 2 if field[self_x - 1][self_y + 1] == 1 else 0,
-                                     1 if field[self_x + 1][self_y - 1] == -1 else 2 if field[self_x + 1][self_y - 1] == 1 else 0,
+                             1 if field[self_x - 1][self_y - 1] == -1 else 0,
+                             1 if field[self_x + 1][self_y + 1] == -1 else 0,
+                             1 if field[self_x - 1][self_y + 1] == -1 else 0,
+                             1 if field[self_x + 1][self_y - 1] == -1 else 0,
 
-                                     1 if self_y == 1 else 1 if field[self_x][self_y - 2] == -1 else 2 if field[self_x][self_y - 2] == 1 else 0,
-                                     1 if self_x == 15 else 1 if field[self_x + 2][self_y] == -1 else 2 if field[self_x + 2][self_y] == 1 else 0,
-                                     1 if self_y == 15 else 1 if field[self_x][self_y + 2] == -1 else 2 if field[self_x][self_y + 2] == 1 else 0,
-                                     1 if self_x == 1 else 1 if field[self_x - 1][self_y] == -1 else 2 if field[self_x - 2][self_y] == 1 else 0
-                                     ]
+                             1 if self_y == 1 else 1 if field[self_x][self_y - 2] == -1 else 0,
+                             1 if self_x == 15 else 1 if field[self_x + 2][self_y] == -1 else 0,
+                             1 if self_y == 15 else 1 if field[self_x][self_y + 2] == -1 else 0,
+                             1 if self_x == 1 else 1 if field[self_x - 1][self_y] == -1 else 0]
+
+    crates_in_direction = [1 if field[self_x][self_y - 1] == 1 else 0,
+                             1 if field[self_x + 1][self_y] == 1 else 0,
+                             1 if field[self_x][self_y + 1] == 1 else 0,
+                             1 if field[self_x - 1][self_y] == 1 else 0,
+
+                             1 if field[self_x - 1][self_y - 1] == 1 else 0,
+                             1 if field[self_x + 1][self_y + 1] == 1 else 0,
+                             1 if field[self_x - 1][self_y + 1] == 1 else 0,
+                             1 if field[self_x + 1][self_y - 1] == 1 else 0,
+
+                             0 if self_y == 1 else 1 if field[self_x][self_y - 2] == 1 else 0,
+                             0 if self_x == 15 else 1 if field[self_x + 2][self_y] == 1 else 0,
+                             0 if self_y == 15 else 1 if field[self_x][self_y + 2] == 1 else 0,
+                             0 if self_x == 1 else 1 if field[self_x - 2][self_y] == 1 else 0]
 
     [coin_x, coin_y], coin_dist = get_nearest_coin(game_state['coins'], (self_x, self_y))
     _, coin_dir = get_dir(coin_x, coin_y, self_x, self_y)
@@ -121,21 +137,25 @@ def state_to_features(game_state, feature_memory):
     _, crate_dir = get_dir(crate_x, crate_y, self_x, self_y)
     # crate_dist_discrete = get_discrete_distance(crate_dist)
 
+    if self.previous_crate_dir is None:
+        _, prev_crate_dir = get_dir(None, None, self_x, self_y)
+    else:
+        prev_crate_dir = self.previous_crate_dir
+
     can_lay_bomb = [1 if bombs_left else 0]
 
-    # TODO: inside blast radius to nearest bomb (all bombs?)?
+    current_features = walls_in_direction + crates_in_direction + coin_dir + bomb_dir + explosion_dir + crate_dir + prev_crate_dir + can_lay_bomb
+    # self.feature_memory.append(current_features)
 
-    current_features = walls_and_crates_in_direction + coin_dir + bomb_dir + explosion_dir + crate_dir + can_lay_bomb + [game_state['step'] / 100]
-    feature_memory.append(current_features)
-
-    all_features += current_features
+    # all_features += current_features
 
     features = np.array(current_features)
-
     features = PolynomialFeatures(include_bias=True).fit_transform(features.reshape(1, -1))
-    features = MinMaxScaler(copy=False).fit_transform(features.reshape(-1, 1))
+    # features = MinMaxScaler(copy=False).fit_transform(features.reshape(-1, 1))
 
-    return features.reshape(1, -1), feature_memory
+    self.previous_crate_dir = crate_dir
+
+    return features.reshape(1, -1)
 
 
 def get_nearest_coin(coin_map, self_pos):
@@ -152,27 +172,38 @@ def get_nearest_coin(coin_map, self_pos):
 
 
 def get_dir(x, y, self_x, self_y):
-    direction = [-1, -1, -1, -1]  # top, right, bottom, left
+    max_distance = 16
+    # up, right, down, left
+    direction_up = list(np.repeat(0, max_distance))
+    direction_right = list(np.repeat(0, max_distance))
+    direction_down = list(np.repeat(0, max_distance))
+    direction_left = list(np.repeat(0, max_distance))
 
     if x is None or y is None:
-        return False, direction
+        return False, (direction_up + direction_right + direction_down + direction_left)
 
     pos_delta_x = x - self_x
     pos_delta_y = y - self_y
 
     # left or right
     if pos_delta_x > 0:
-        direction[1] = pos_delta_x  # "RIGHT"
+        direction_right[pos_delta_x] = 1  # "RIGHT"
     elif pos_delta_x < 0:
-        direction[3] = pos_delta_x   # "LEFT"
+        direction_left[abs(pos_delta_x)] = 1   # "LEFT"
+    else:
+        direction_left[0] = 1
+        direction_right[0] = 1
 
     # top or bottom
     if pos_delta_y > 0:
-        direction[2] = pos_delta_y   # "DOWN"
+        direction_down[pos_delta_x] = 1   # "DOWN"
     elif pos_delta_y < 0:
-        direction[0] = pos_delta_y   # "UP"
+        direction_up[abs(pos_delta_y)] = 1   # "UP"
+    else:
+        direction_up[0] = 1
+        direction_down[0] = 1
 
-    return True, direction
+    return True, (direction_up + direction_right + direction_down + direction_left)
 
 
 def get_nearest_crate(field, self_pos):
@@ -220,8 +251,8 @@ def get_nearest_explosion(explosion_field, self_pos):
     return (min_x, min_y), min_dist
 
 
-def reset_memory(memory):
-    for i in range(memory.maxlen):
-        memory.append(list(np.zeros(FEATURE_LENGTH//(memory.maxlen+1))))
-
-    return memory
+# def reset_memory(memory):
+#     for i in range(memory.maxlen):
+#         memory.append(list(np.zeros(FEATURE_LENGTH//(memory.maxlen+1))))
+#
+#     return memory
