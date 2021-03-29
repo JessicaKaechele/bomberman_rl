@@ -101,10 +101,10 @@ def state_to_features(self, game_state):
                              1 if field[self_x - 1][self_y + 1] == -1 else 0,
                              1 if field[self_x + 1][self_y - 1] == -1 else 0,
 
-                             1 if self_y == 1 else 1 if field[self_x][self_y - 2] == -1 else 0,
-                             1 if self_x == 15 else 1 if field[self_x + 2][self_y] == -1 else 0,
-                             1 if self_y == 15 else 1 if field[self_x][self_y + 2] == -1 else 0,
-                             1 if self_x == 1 else 1 if field[self_x - 1][self_y] == -1 else 0]
+                             0 if self_y == 1 else 1 if field[self_x][self_y - 2] == -1 else 0,
+                             0 if self_x == 15 else 1 if field[self_x + 2][self_y] == -1 else 0,
+                             0 if self_y == 15 else 1 if field[self_x][self_y + 2] == -1 else 0,
+                             0 if self_x == 1 else 1 if field[self_x - 1][self_y] == -1 else 0]
 
     crates_in_direction = [1 if field[self_x][self_y - 1] == 1 else 0,
                              1 if field[self_x + 1][self_y] == 1 else 0,

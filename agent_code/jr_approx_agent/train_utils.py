@@ -73,12 +73,12 @@ def events_from_state(old_game_state, new_game_state, events):
                 current_events += list(np.repeat(ce.POTENTIAL_TO_EXPLODE_CRATE, 3))
 
         if distance is not None:
-            if distance >= 4:
-                distance_multiplier = min(distance - 2, 3)
-                current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_EXPLODE_CRATE, distance_multiplier))
-            else:
-                distance_multiplier = min(3 - distance, 3)
-                current_events += list(np.repeat(ce.POTENTIAL_TO_EXPLODE_CRATE, distance_multiplier))
+            # if distance >= 4:
+            #     distance_multiplier = min(distance - 2, 3)
+            #     current_events += list(np.repeat(ce.POTENTIAL_TO_NOT_EXPLODE_CRATE, distance_multiplier))
+            # else:
+            #     distance_multiplier = min(3 - distance, 3)
+            #     current_events += list(np.repeat(ce.POTENTIAL_TO_EXPLODE_CRATE, distance_multiplier))
 
             if distance == 1 and e.BOMB_DROPPED in current_events:
                 current_events += [ce.DROPPED_BOMB_NEAR_CRATE]
