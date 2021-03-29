@@ -12,3 +12,4 @@ scipy==1.6.1
 six==1.15.0
 threadpoolctl==2.1.0
 tqdm==4.58.0
+lightgbm==3.1.1
