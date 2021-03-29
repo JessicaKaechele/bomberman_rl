@@ -13,15 +13,12 @@ from .callbacks import state_to_features
 Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
 
-# Hyper parameters -- DO modify
-# TODO: modify
+# Hyper parameters
 TRANSITION_HISTORY_SIZE = 1000  # keep only ... last transitions
 RECORD_ENEMY_TRANSITIONS = 1.0  # record enemy transitions with probability ...
-BATCH_SIZE=20
 GAMMA = 0.95
 LEARNING_RATE = 0.001
 # Events
-# TODO: zusätzliche events?
 DISTANCE_2 = "DISTANCE_2"
 DISTANCE_1 = "DISTANCE_1"
 DISTANCE_0 = "DISTANCE_0"
@@ -62,13 +59,19 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     """
     self.logger.debug(f'Encountered game event(s) {", ".join(map(repr, events))} in step {new_game_state["step"]}')
 
-    # Idea: Add your own events to hand out rewards
-    # TODO: own events?
-    current_pos = new_game_state['self'][3]
+    add_events(events, new_game_state, self)
 
-    t=0
+    reward = reward_from_events(self, events)
+    self.all_rewards.append(reward)
+    if self_action:
+        self.transitions.append(Transition(state_to_features(old_game_state), self_action, state_to_features(new_game_state), reward))
+
+
+def add_events(events, new_game_state, self):
+    current_pos = new_game_state['self'][3]
     if len(self.last_positions) == 5:
-        dis_2 = np.sqrt((self.last_positions[2][0] - current_pos[0])**2 + (self.last_positions[2][1] - current_pos[1])**2)
+        dis_2 = np.sqrt(
+            (self.last_positions[2][0] - current_pos[0]) ** 2 + (self.last_positions[2][1] - current_pos[1]) ** 2)
         dis_1 = np.sqrt(
             (self.last_positions[1][0] - current_pos[0]) ** 2 + (self.last_positions[1][1] - current_pos[1]) ** 2)
         dis_0 = np.sqrt(
@@ -80,11 +83,6 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
         if dis_0 < 3:
             events.append(DISTANCE_0)
     self.last_positions.append(current_pos)
-
-    reward = reward_from_events(self, events)
-    self.all_rewards.append(reward)
-    if self_action:
-        self.transitions.append(Transition(state_to_features(old_game_state), self_action, state_to_features(new_game_state), reward))
 
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
@@ -100,17 +98,16 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     :param self: The same object that is passed to all of your callbacks.
     """
     self.logger.debug(f'Encountered event(s) {", ".join(map(repr, events))} in final step')
+
     reward = reward_from_events(self, events)
     self.all_rewards.append(reward)
     self.transitions.append(Transition(state_to_features(last_game_state), last_action, None, reward))
-    if len(self.transitions) < BATCH_SIZE:
-        return
+
     batch = random.sample(self.transitions, int(len(self.transitions) / 1))
     X = []
     targets = []
     for state, action, state_next, reward in batch:
         q_update = reward
-        q_values = []
         if self.is_fit:
             q_values = self.model.predict([state])
         else:
@@ -118,36 +115,28 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
 
         if state_next is not None:
             if self.is_fit:
-                #q_update = (reward + GAMMA * np.amax(self.model.predict(state_next)[0]))
-                q_value = q_values[0][self.actions[action]]
-                new_q_value = np.max(self.model.predict([state_next]))
-                q_update = q_value + LEARNING_RATE * (reward + GAMMA * new_q_value - q_value)
+                # bellman
+                q_update = (reward + GAMMA * np.amax(self.model.predict([state_next])[0]))
+                # td q-learning
+                #q_value = q_values[0][self.actions[action]]
+                #new_q_value = np.max(self.model.predict([state_next]))
+                #q_update = q_value + LEARNING_RATE * (reward + GAMMA * new_q_value - q_value)
             else:
                 q_update = reward
 
 
         q_values[0][self.actions[action]] = q_update
-
-        # print(state)
-        # print(action)
-        # print(q_values)
         X.append(state)
         targets.append(q_values[0])
-    # print(X)
-    # print(targets)
+
     self.model.fit(X, targets)
-    self.isFit = True
+    self.is_fit = True
 
-
-    # save statistic
-    #plt.plot(self.all_rewards);
-    #plt.savefig("rewards_per_step")
-    #plt.xlabel("step")
-    #plt.ylabel("reward")
     with open("statistics", "a") as f:
         for reward in self.all_rewards:
             f.writelines(str(reward)+ "\n")
     self.all_rewards = []
+
     # Store the model
     with open("jessi-saved-model.pt", "wb") as file:
         pickle.dump(self.model, file)
@@ -161,17 +150,17 @@ def reward_from_events(self, events: List[str]) -> int:
     certain behavior.
     """
     game_rewards = {
-        e.MOVED_LEFT: -1,
-        e.MOVED_RIGHT: -1,
-        e.MOVED_UP: -1,
-        e.MOVED_DOWN: -1,
+        e.MOVED_LEFT: 1,
+        e.MOVED_RIGHT: 1,
+        e.MOVED_UP: 1,
+        e.MOVED_DOWN: 1,
         e.WAITED: -10,
         e.INVALID_ACTION: -10,
         e.BOMB_EXPLODED: 0,
         e.BOMB_DROPPED: 0,
         e.CRATE_DESTROYED: 0,
-        e.COIN_FOUND: 10,
-        e.COIN_COLLECTED: 1000,
+        e.COIN_FOUND: 0,
+        e.COIN_COLLECTED: 100,
         e.KILLED_OPPONENT: 0,
         e.KILLED_SELF: 0,
         e.GOT_KILLED: 0,
@@ -181,6 +170,7 @@ def reward_from_events(self, events: List[str]) -> int:
         DISTANCE_1: -20,
         DISTANCE_0: -30
     }
+
     reward_sum = 0
     for event in events:
         if event in game_rewards:

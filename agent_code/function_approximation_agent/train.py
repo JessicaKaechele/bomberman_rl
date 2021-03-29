@@ -9,7 +9,7 @@ from .custom_events import not_moving_event, did_not_escape_event, can_not_escap
     coin_reachable_event, DISTANCE_2, DISTANCE_1, DISTANCE_0, DROP_BOMB_NEAR_CRATE, DID_NOT_ESCAPE
 from .utils import add_statistics, end_statistics, save_model, save_rewards
 
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.1
 DISCOUNT_FACTOR = 0.99
 ACTIONS = {'UP': 0, 'RIGHT':1, 'DOWN':2, 'LEFT':3, 'WAIT':4, 'BOMB':5}
 
@@ -56,16 +56,20 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
 
     add_statistics(self, events)
 
+    add_events(arena, coins, events, new_game_state, self, x, y)
+
+    reward = get_reward(self, events, new_game_state)
+    self.all_rewards.append(reward)
+
+    do_learning(self, new_game_state, old_game_state, reward, self_action)
+
+
+def add_events(arena, coins, events, new_game_state, self, x, y):
     not_moving_event(x, y, events, self)
     coin_reachable_event(arena, coins, events, x, y)
     bomb_near_crate_event(arena, events, x, y)
     can_not_escape_event(events, new_game_state, x, y)
     did_not_escape_event(self, x, y, events)
-
-    reward = reward_from_events(self, events)
-    self.all_rewards.append(reward)
-
-    do_learning(self, new_game_state, old_game_state, reward, self_action)
 
 
 def do_learning(self, new_game_state, old_game_state, reward, self_action):
@@ -74,22 +78,16 @@ def do_learning(self, new_game_state, old_game_state, reward, self_action):
         next_features = state_to_features(new_game_state)
         q_values_next = np.array([m.predict([next_features])[0] for m in self.model])
 
-        # q learning or bellman?
+        # bellman
         update = reward + DISCOUNT_FACTOR * np.max(q_values_next)
         self.model[ACTIONS[self_action]].partial_fit([features], [update])
 
         # q learning with temporal difference
-        # q_value = self.model[ACTIONS[self_action]].predict([features])
-        # new_q_value = np.max(q_values_next)
-        # update = q_value + LEARNING_RATE * (reward + DISCOUNT_FACTOR * new_q_value - q_value)
-        # self.model[ACTIONS[self_action]].partial_fit([features], update)
+        #q_value = self.model[ACTIONS[self_action]].predict([features])
+        #new_q_value = np.max(q_values_next)
+        #update = q_value + LEARNING_RATE * (reward + DISCOUNT_FACTOR * new_q_value - q_value)
+        #self.model[ACTIONS[self_action]].partial_fit([features], update)
 
-        # SARSA
-        # next_action = act(self, new_game_state)
-        # new_q_value = self.model[ACTIONS[next_action]].predict([next_features])
-        # update = q_value + LEARNING_RATE * (reward + DISCOUNT_FACTOR * new_q_value - q_value)
-        # self.model[ACTIONS[self_action]].partial_fit([features], update)
-        # self_action = next_action
     elif not new_game_state:
         features = state_to_features(old_game_state)
         self.model[ACTIONS[self_action]].partial_fit([features], [reward])
@@ -110,7 +108,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     """
     self.logger.debug(f'Encountered event(s) {", ".join(map(repr, events))} in final step')
 
-    reward = reward_from_events(self, events)
+    reward = get_reward(self, events)
     self.all_rewards.append(reward)
     do_learning(self, None, last_game_state, reward, last_action)
 
@@ -120,6 +118,25 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     save_model(self)
     end_statistics(self, events)
     save_rewards(self)
+
+def distances_to_bomb(bombs, position):
+    x, y = position
+    distances = 0
+    for bomb in bombs:
+        bomb_x =  bomb[0][0]
+        bomb_y = bomb[0][1]
+        if (x != bomb_x and y != bomb_y):
+            distance = 15
+        else:
+            distance = np.sqrt((x - bomb_x) ** 2 + (y - bomb_y) ** 2)
+        distances += distance
+    return distances * 50
+
+def get_reward(self, events, game_state = None):
+    reward = reward_from_events(self, events)
+    if game_state:
+        reward += distances_to_bomb(game_state["bombs"], game_state['self'][3])
+    return reward
 
 def reward_from_events(self, events: List[str]) -> int:
     """
@@ -136,8 +153,8 @@ def reward_from_events(self, events: List[str]) -> int:
         e.WAITED: -1,
         e.INVALID_ACTION: -10,
         e.BOMB_EXPLODED: 0,
-        e.BOMB_DROPPED: -10,
-        e.CRATE_DESTROYED: 100,
+        e.BOMB_DROPPED: 40,
+        e.CRATE_DESTROYED: 30,
         e.COIN_FOUND: 10,
         e.COIN_COLLECTED: 1000,
         e.KILLED_OPPONENT: 1000,
@@ -145,16 +162,18 @@ def reward_from_events(self, events: List[str]) -> int:
         e.GOT_KILLED: 0,
         e.OPPONENT_ELIMINATED: 0,
         e.SURVIVED_ROUND: 0,
-        DROP_BOMB_NEAR_CRATE: 15,
-        DID_NOT_ESCAPE: -100,
-        #CAN_NOT_ESCAPE: -100
-        #COIN_NOT_REACHABLE: -20,
-        DISTANCE_2: -1,
-        DISTANCE_1: -2,
-        DISTANCE_0: -3
+        # DROP_BOMB_NEAR_CRATE: 15,
+        # DID_NOT_ESCAPE: -50,
+        # CAN_NOT_ESCAPE:-100
+        # COIN_NOT_REACHABLE:-20,
+        # DISTANCE_2:-1,
+        # DISTANCE_1:-2,
+        # DISTANCE_0:-3
     }
     reward_sum = 0
     for event in events:
+        if event == DID_NOT_ESCAPE:
+            pass
         if event in game_rewards:
             reward_sum += game_rewards[event]
     self.logger.info(f"Awarded {reward_sum} for events {', '.join(events)}")

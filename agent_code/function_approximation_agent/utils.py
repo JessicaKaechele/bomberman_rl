@@ -32,7 +32,7 @@ def save_model(self):
 
 
 def save_rewards(self):
-    with open("rewards/statistics", "a") as f:
+    with open("statistics/rewards", "a") as f:
         for reward in self.all_rewards:
             f.writelines(str(reward) + "\n")
     self.all_rewards = []

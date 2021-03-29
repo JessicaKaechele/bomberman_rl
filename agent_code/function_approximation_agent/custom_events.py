@@ -1,6 +1,6 @@
 import numpy as np
 
-from agent_code.my_function_approximation_agent_2.features import coin_reachable, directions_to_nearest_coins, \
+from agent_code.function_approximation_agent.features import coin_reachable, directions_to_nearest_coins, \
     directions_to_wall, crates_destroyable
 
 DISTANCE_2 = "DISTANCE_2"
@@ -29,7 +29,6 @@ def not_moving_event(x,y, events, self):
 
     self.last_positions.append((x,y))
 
-
 def did_not_escape_event(self, x, y, events):
     if "BOMB_DROPPED" in events and self.dropped_bomb == False:
         self.dropped_bomb = True
@@ -40,15 +39,14 @@ def did_not_escape_event(self, x, y, events):
     if self.dropped_bomb and self.bomb_counter > 0:
         distance = np.sqrt((x-self.bomb_position[0])**2 + (y-self.bomb_position[1])**2)
         self.bomb_counter -= 1
-        if distance <= self.bomb_distance:
+        if distance > self.bomb_distance:
             events.append(DID_NOT_ESCAPE)
             self.bomb_distance = distance
-        elif (x == self.bomb_position[0] or y == self.bomb_position[1]):
+        elif (x != self.bomb_position[0] and y != self.bomb_position[1]):
             events.append(DID_NOT_ESCAPE)
 
     else:
         self.dropped_bomb = False
-
 
 def can_not_escape_event(events, new_game_state, x, y):
     if "BOMB_DROPPED" in events and can_not_escape(new_game_state, x, y):
@@ -112,7 +110,6 @@ def can_not_escape(game_state, x,y):
         return True
 
     return False
-
 
 def bomb_near_crate_event(arena, events, x, y):
     if "BOMB_DROPPED" in events and crates_destroyable(arena, x, y) > 0:

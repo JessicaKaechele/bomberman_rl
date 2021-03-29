@@ -59,9 +59,9 @@ def in_danger(field, bombs, x, y):
     for (xb, yb), t in bombs:
          for (i, j) in [(xb + h, yb) for h in range(-3, 4)] + [(xb, yb + h) for h in range(-3, 4)]:
              if (0 < i < arena.shape[0]) and (0 < j < arena.shape[1]):
-                 arena[i, j] = 1#min(arena[i, j], t)
+                 arena[i, j] = 2#min(arena[i, j], t)
              if (i,j) == (xb,yb):
-                 arena[i, j] = 2
+                 arena[i, j] = 3
     for x_i in range(x-4, x+5):
         for y_i in range(y-4, y+5):
             if x_i < 0 or x_i > 16 or y_i < 0 or y_i > 16:
@@ -74,14 +74,7 @@ def in_danger(field, bombs, x, y):
 
 def state_to_features(game_state: dict) -> np.array:
     """
-    *This is not a required function, but an idea to structure your code.*
-
-    Converts the game state to the input of your model, i.e.
-    a feature vector.
-
-    You can find out about the state of the game environment via game_state,
-    which is a dictionary. Consult 'get_state_for_agent' in environment.py to see
-    what it contains.
+    Converts the game state to a feature vector.
 
     :param game_state:  A dictionary describing the current game board.
     :return: np.array
@@ -94,44 +87,43 @@ def state_to_features(game_state: dict) -> np.array:
     arena = game_state['field']
     _, score, bombs_left, (x, y) = game_state['self']
     bombs = game_state['bombs']
-    explosion_map = game_state['explosion_map']
-    others = [xy for (n, s, b, xy) in game_state['others']]
     coins = game_state['coins']
 
-
-
-    # central = np.full((34, 34), 0)
-    # x_new = 17 - x
-    # y_new = 17 - y
-    # central[y_new:(y_new + 17), x_new:(x_new + 17)] = arena.T
-    #
-    # coin_coords = np.array(coins).T
-    # coin_coords_x = y_new + coin_coords[0]
-    # coin_coords_y = x_new + coin_coords[1]
-    # central[(coin_coords_x, coin_coords_y)] = 1
-
-    coin_map = np.zeros_like(arena)
-    coin_map[tuple(np.array(coins).T)] = 1
-
-    self_map = np.full(arena.shape, -1)
-    self_map[x,y] = int(bombs_left)
-
-    crates_destroyable(arena, x, y)
-
     channels = []
-    #channels.append(1)
 
-    #channels.append(coin_map)
-    #channels.append(self_map)
-    #channels.append(central[11:20, 11:20])
+    # coin and self map
+    # coin_map = np.zeros_like(arena)
+    # coin_map[tuple(np.array(coins).T)] = 1
+
+    # self_map = np.full(arena.shape, -1)
+    # self_map[x, y] = int(bombs_left)
+    # channels.append(coin_map)
+    # channels.append(self_map)
+
+    # central
+    # central = get_central(arena, coins, x, y)
+    # channels.append(central[10:20, 10:20])
+
+
     channels.append(directions_to_nearest_coins(coins, x, y))
-    #channels.append(directions_to_wall(arena, x, y))
+    # channels.append(directions_to_wall(arena, x, y))
+    stacked_channels = np.stack(channels).reshape(-1)
+
     crates = crates_destroyable(arena, x, y)
     danger = in_danger(arena, bombs, x, y)
-    # concatenate them as a feature tensor (they must have the same shape), ...
-    stacked_channels = np.stack(channels).reshape(-1)
-    # stacked_channels = np.append(stacked_channels, coin_reachable(directions_to_nearest_coins(coins, x, y), directions_to_wall(arena, x, y)))
-    # and return them as a vector
+
     stacked_channels = np.append(stacked_channels, crates)
     stacked_channels = np.append(stacked_channels, np.array(danger))
     return stacked_channels
+
+
+def get_central(arena, coins, x, y):
+    central = np.full((34, 34), 0)
+    x_new = 17 - x
+    y_new = 17 - y
+    central[y_new:(y_new + 17), x_new:(x_new + 17)] = arena.T
+    coin_coords = np.array(coins).T
+    coin_coords_x = y_new + coin_coords[0]
+    coin_coords_y = x_new + coin_coords[1]
+    central[(coin_coords_x, coin_coords_y)] = 1
+    return central
